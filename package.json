@@ -12,12 +12,18 @@
     "electron": "^28.2.0",
     "electron-builder": "^24.9.1"
   },
+  "dependencies": {
+    "portfinder": "^1.0.32"
+  },
   "build": {
     "appId": "com.utas.pax.demo",
     "productName": "Pax Demo",
     "directories": {
       "output": "dist"
     },
+    "asarUnpack": [
+      "utas_pax_demo_api/games/**/*"
+    ],
     "files": [
       "main.js",
       "utas_pax_demo_api/**/*",

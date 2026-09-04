@@ -13,5 +13,10 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'games')));
 app.use(express.static(path.join(__dirname, '../utas_pax_demo_flutter/build/web')));
 
+// Catch-all to handle Flutter routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../utas_pax_demo_flutter/build/web/index.html'));
+});
+
 
 module.exports = app;

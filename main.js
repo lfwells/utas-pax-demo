@@ -1,58 +1,60 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { fork } = require('child_process');
+const http = require('http');
+const portfinder = require('portfinder');
 
 let apiProcess;
-const API_PORT = 5999; // You can use a dynamic port if preferred
 
-function startBackend() {
-  // Path to your Node.js entry point
-  // We use fork to run it as a separate process
+async function startBackend() {
+  // Find an available port starting from 5000
+  const port = await portfinder.getPortPromise({ port: 5000 });
+
   const scriptPath = path.join(__dirname, 'utas_pax_demo_api/bin/www');
-  
   apiProcess = fork(scriptPath, [], {
-    env: { 
-      ...process.env, 
-      PORT: API_PORT,
-      NODE_ENV: 'production'
-    }
+    env: { ...process.env, PORT: port, NODE_ENV: 'production' },
+    cwd: path.join(__dirname, 'utas_pax_demo_api')
   });
 
-  apiProcess.on('error', (err) => {
-    console.error('Failed to start backend:', err);
-  });
+  console.log(`Backend starting on port: ${port}`);
+  return port;
 }
 
-function createWindow() {
+function createWindow(port) {
   const win = new BrowserWindow({
     width: 1280,
     height: 720,
     backgroundColor: '#000000',
     webPreferences: {
-      // Security: Disable node integration in the frontend
       nodeIntegration: false,
-      contextIsolation: true,
+      contextIsolation: true
     }
   });
 
-  // Load the Flutter web build
-  const flutterIndex = path.join(__dirname, 'utas_pax_demo_flutter/build/web/index.html');
-  win.loadFile(flutterIndex);
+  const apiUrl = `http://localhost:${port}`;
 
-  // Optional: Open dev tools during development
-  // win.webContents.openDevTools();
+  // Poll the server until it's ready, then load the URL
+  // Flutter will automatically detect this URL via Uri.base
+  const checkServer = () => {
+    http.get(apiUrl, (res) => {
+      win.loadURL(apiUrl);
+    }).on('error', () => {
+      setTimeout(checkServer, 200); 
+    });
+  };
+
+  checkServer();
 }
 
-app.whenReady().then(() => {
-  startBackend();
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+app.whenReady().then(async () => {
+  try {
+    const port = await startBackend();
+    createWindow(port);
+  } catch (err) {
+    console.error('Failed to start app:', err);
+  }
 });
 
-// Ensure the Node process dies when Electron exits
 app.on('window-all-closed', () => {
   if (apiProcess) apiProcess.kill();
   if (process.platform !== 'darwin') app.quit();

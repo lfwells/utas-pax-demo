@@ -43,8 +43,30 @@ class BaseUrlPage extends StatefulWidget {
 
 class _BaseUrlPageState extends State<BaseUrlPage> {
   //determine the default base url from the current browser url
-  final TextEditingController _controller =
-      TextEditingController(text: 'http://localhost:5999/');
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    
+    // Get the base URL from the browser's current location
+    final uri = Uri.base;
+    final protocol = uri.scheme.isEmpty ? 'http' : uri.scheme;
+    final host = uri.host.isEmpty ? 'localhost' : uri.host;
+    final port = uri.port == 0 ? 5999 : uri.port;
+    
+    final currentBaseUrl = '$protocol://$host:$port/';
+    
+    _controller = TextEditingController(text: currentBaseUrl);
+
+    // If we are running on a server (like inside Electron/Express), 
+    // automatically navigate to the grid.
+    if (uri.host.isNotEmpty || uri.port != 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _saveAndNavigate();
+      });
+    }
+  }
 
   void _saveAndNavigate() {
     final url = _controller.text.trim();

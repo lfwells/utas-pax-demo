@@ -1,23 +1,47 @@
 name: Build Release
 on: [push]
+
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
-      - name: Install & Build
+          node-version: 20 # Using a more modern stable Node version
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Install & Build Project
         run: |
+          # 1. Install root Electron dependencies
           npm install
-          cd utas_pax_demo_api && npm install
+          
+          # 2. Install API dependencies
+          cd utas_pax_demo_api
+          npm install
           cd ..
-          cd utas_pax_demo_flutter && flutter build web --release --web-renderer canvaskit
+          
+          # 3. Build Flutter Web
+          cd utas_pax_demo_flutter
+          flutter pub get
+          flutter build web --release --web-renderer canvaskit
           cd ..
+          
+          # 4. Package Electron EXE
           npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: windows-exe
-          path: dist/*.exe
+          name: windows-executable
+          path: dist/*.exe # This grabs the portable EXE or installer
+          if-no-files-found: error
