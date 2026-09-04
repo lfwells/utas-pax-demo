@@ -20,16 +20,15 @@ jobs:
 
       - name: Install & Build Project
         run: |
-          # 1. Install Node dependencies
           npm install
           
-          # 2. Build Flutter Web
+          # Build Flutter Web
           cd utas_pax_demo_flutter
           flutter pub get
           flutter build web --release
           cd ..
           
-          # 3. Create dist folder and package the EXE
+          # Package the EXE
           mkdir dist
           npm run package:windows
         env:

@@ -24,8 +24,8 @@
   },
   "pkg": {
     "assets": [
-      "utas_pax_demo_api/games/**",
-      "utas_pax_demo_flutter/build/web/**"
+      "utas_pax_demo_api/games/**/*",
+      "utas_pax_demo_flutter/build/web/**/*"
     ]
   }
 }
