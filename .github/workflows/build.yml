@@ -20,10 +20,16 @@ jobs:
 
       - name: Install & Build Project
         run: |
-          # 1. Install dependencies
+          # 1. Install Node dependencies
           npm install
           
-          # 2. Package Standalone Binary (Assumes Flutter is already built or handled elsewhere)
+          # 2. Build Flutter Web (Required for the GitHub build to include the UI)
+          cd utas_pax_demo_flutter
+          flutter pub get
+          flutter build web --release --web-renderer canvaskit
+          cd ..
+          
+          # 3. Package the EXE
           npm run package:windows
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
