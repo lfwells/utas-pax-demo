@@ -1,43 +1,30 @@
 {
   "name": "utas-pax-demo",
   "version": "1.0.0",
-  "description": "Pax Demo App",
-  "main": "main.js",
-  "author": "Lindsay Wells",
+  "description": "Pax Demo Standalone Launcher",
+  "main": "launcher.js",
+  "bin": "launcher.js",
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder"
-  },
-  "devDependencies": {
-    "electron": "^28.2.0",
-    "electron-builder": "^24.9.1"
+    "start": "node launcher.js",
+    "package:macos": "pkg . --targets node18-macos-arm64 --output \"dist/Pax Demo\" --public --public-packages \"*\"",
+    "package:windows": "pkg . --targets node18-win-x64 --output \"dist/Pax Demo.exe\" --public --public-packages \"*\"",
+    "build": "npm run package:macos"
   },
   "dependencies": {
+    "cors": "^2.8.6",
+    "debug": "~2.6.9",
+    "express": "~4.16.1",
+    "http-errors": "~1.6.3",
+    "morgan": "~1.9.1",
     "portfinder": "^1.0.32"
   },
-  "build": {
-    "appId": "com.utas.pax.demo",
-    "productName": "Pax Demo",
-    "directories": {
-      "output": "dist"
-    },
-    "asarUnpack": [
-      "utas_pax_demo_api/games/**/*"
-    ],
-    "files": [
-      "main.js",
-      "utas_pax_demo_api/**/*",
-      "utas_pax_demo_flutter/build/web/**/*",
-      "!**/node_modules/*/{CHANGELOG.md,README.md,test,obj,bin}*",
-      "!utas_pax_demo_flutter/build/web/**/*.map"
-    ],
-    "mac": {
-      "target": ["zip", "dir"],
-      "category": "public.app-category.games"
-    },
-    "win": {
-      "target": "portable"
-    },
-    "asar": true 
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "utas_pax_demo_api/games/**/*",
+      "utas_pax_demo_flutter/build/web/**/*"
+    ]
   }
 }

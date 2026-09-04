@@ -109,13 +109,14 @@
         createUnityInstance(canvas, config, (progress) => {
           document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
               }).then((unityInstance) => {
+                /*
                 document.querySelector("#unity-loading-bar").style.display = "none";
                 document.querySelector("#unity-fullscreen-button").onclick = () => {
                   unityInstance.SetFullscreen(1);
   const triggerFS = () => { unityInstance.SetFullscreen(1); window.removeEventListener('click', triggerFS); window.removeEventListener('touchend', triggerFS); };
   window.addEventListener('click', triggerFS);
   window.addEventListener('touchend', triggerFS);
-                };
+                };*/
 
               }).catch((message) => {
                 alert(message);

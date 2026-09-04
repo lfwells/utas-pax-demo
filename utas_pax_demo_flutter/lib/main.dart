@@ -48,18 +48,18 @@ class _BaseUrlPageState extends State<BaseUrlPage> {
   @override
   void initState() {
     super.initState();
-    
+
     // Get the base URL from the browser's current location
     final uri = Uri.base;
     final protocol = uri.scheme.isEmpty ? 'http' : uri.scheme;
     final host = uri.host.isEmpty ? 'localhost' : uri.host;
     final port = uri.port == 0 ? 5999 : uri.port;
-    
+
     final currentBaseUrl = '$protocol://$host:$port/';
-    
+
     _controller = TextEditingController(text: currentBaseUrl);
 
-    // If we are running on a server (like inside Electron/Express), 
+    // If we are running on a server (like inside Electron/Express),
     // automatically navigate to the grid.
     if (uri.host.isNotEmpty || uri.port != 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -305,8 +305,10 @@ class _GameDetailPageState extends State<GameDetailPage> {
         iframe.style.border = 'none';
         iframe.style.width = '100%';
         iframe.style.height = '100%';
-        iframe.allow = 'fullscreen; autoplay';
+        iframe.allow = 'fullscreen; autoplay; gamepad; encrypted-media; midi; clipboard-write';
         iframe.setAttribute('allowfullscreen', 'true');
+        iframe.setAttribute('webkitallowfullscreen', 'true');
+        iframe.setAttribute('mozallowfullscreen', 'true');
         return iframe;
       },
     );
