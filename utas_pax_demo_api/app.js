@@ -3,6 +3,7 @@ var express = require('express');
 var path = require('path');
 var logger = require('morgan');
 var cors = require('cors');
+var fs = require('fs');
 
 var app = express();
 
@@ -21,7 +22,13 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 // Serve static files with correct MIME types
-app.use(express.static(path.join(__dirname, 'games'), {
+const gamesPath = path.join(__dirname, 'games');
+console.log('Games path:', gamesPath);
+if (!fs.existsSync(gamesPath)) {
+    console.warn('WARNING: Games path does not exist:', gamesPath);
+}
+
+app.use(express.static(gamesPath, {
   setHeaders: (res, path) => {
     if (path.endsWith('.wasm')) {
       res.setHeader('Content-Type', 'application/wasm');
@@ -29,11 +36,22 @@ app.use(express.static(path.join(__dirname, 'games'), {
   }
 }));
 
-app.use(express.static(path.join(__dirname, '../utas_pax_demo_flutter/build/web')));
+const flutterPath = path.join(__dirname, '..', 'utas_pax_demo_flutter', 'build', 'web');
+console.log('Flutter path:', flutterPath);
+if (!fs.existsSync(flutterPath)) {
+    console.warn('WARNING: Flutter path does not exist:', flutterPath);
+}
+
+app.use(express.static(flutterPath));
 
 // Catch-all to handle Flutter routing
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../utas_pax_demo_flutter/build/web/index.html'));
+  const indexPath = path.join(flutterPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).send('Flutter build not found at ' + indexPath);
+  }
 });
 
 module.exports = app;

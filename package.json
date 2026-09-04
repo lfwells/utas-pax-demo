@@ -6,9 +6,10 @@
   "bin": "launcher.js",
   "scripts": {
     "start": "node launcher.js",
-    "package:macos": "pkg . --targets node18-macos-arm64 --output \"dist/Pax Demo\" --public --public-packages \"*\"",
-    "package:windows": "pkg . --targets node18-win-x64 --output \"dist/Pax Demo.exe\" --public --public-packages \"*\"",
-    "build": "npm run package:macos"
+    "build:flutter": "cd utas_pax_demo_flutter && flutter build web --release",
+    "package:macos": "pkg . --targets node18-macos-arm64 --output \"dist/Pax Demo\" --public",
+    "package:windows": "pkg . --targets node18-win-x64 --output dist/pax-demo.exe --public",
+    "build": "npm run build:flutter && npm run package:macos"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -23,8 +24,8 @@
   },
   "pkg": {
     "assets": [
-      "utas_pax_demo_api/games/**/*",
-      "utas_pax_demo_flutter/build/web/**/*"
+      "utas_pax_demo_api/games/**",
+      "utas_pax_demo_flutter/build/web/**"
     ]
   }
 }

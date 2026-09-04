@@ -23,14 +23,34 @@ jobs:
           # 1. Install Node dependencies
           npm install
           
-          # 2. Build Flutter Web (Required for the GitHub build to include the UI)
+          # 2. Build Flutter Web
           cd utas_pax_demo_flutter
           flutter pub get
           flutter build web --release
           cd ..
           
-          # 3. Package the EXE
-          npm run package:windows
+          # 3. Debug: Verify asset existence and size
+          echo "Verifying games assets..."
+          if (Test-Path "utas_pax_demo_api/games/fishing_trip/Build/TLFT-Build11.data") { 
+            echo "Found Unity data file." 
+            ls "utas_pax_demo_api/games/fishing_trip/Build/TLFT-Build11.data"
+          } else { 
+            echo "CRITICAL: Unity data file NOT found!" 
+          }
+          
+          echo "Verifying flutter assets..."
+          if (Test-Path "utas_pax_demo_flutter/build/web/index.html") { 
+            echo "Found Flutter index file."
+          } else { 
+            echo "CRITICAL: Flutter index NOT found!" 
+          }
+          
+          # 4. Create dist folder
+          mkdir dist
+          
+          # 5. Package the EXE
+          # Using the script from package.json directly
+          npm run package:windows -- --debug
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -38,5 +58,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-standalone-exe
-          path: dist/*.exe
+          path: dist/pax-demo.exe
           if-no-files-found: error
