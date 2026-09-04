@@ -1,0 +1,49 @@
+{
+    "games": [
+        {
+            "name": "Soup Weather",
+            "url": "/soup_weather.html",
+            "author": "That Girl, according to Nicole"
+        },
+        {
+            "name": "AFK",
+            "url": "/soup_weather.html",
+            "author": "Shaun The Sheep"
+        },
+        {
+            "name": "The Last Fishing Trip",
+            "url": "/fishing_trip",
+            "author": "Taylor Lewincamp"
+        },
+        {
+            "name": "Blah",
+            "url": "/soup_weather.html",
+            "author": "Lindsay Wells"
+        },
+        {
+            "name": "Test",
+            "url": "/soup_weather.html",
+            "author": "Lindsay Wells"
+        },
+        {
+            "name": "Test 2",
+            "url": "/soup_weather.html",
+            "author": "Lindsay Wells"
+        },
+        {
+            "name": "Blah 2",
+            "url": "/soup_weather.html",
+            "author": "Lindsay Wells"
+        },
+        {
+            "name": "kill me",
+            "url": "/soup_weather.html",
+            "author": "Lindsay Wells"
+        },
+        {
+            "name": "make it stop 2",
+            "url": "/soup_weather.html",
+            "author": "Lindsay Wells"
+        }
+    ]
+}

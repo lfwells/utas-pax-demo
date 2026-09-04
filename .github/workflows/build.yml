@@ -1,0 +1,23 @@
+name: Build Release
+on: [push]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      - name: Install & Build
+        run: |
+          npm install
+          cd utas_pax_demo_api && npm install
+          cd ..
+          cd utas_pax_demo_flutter && flutter build web --release --web-renderer canvaskit
+          cd ..
+          npm run build
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-exe
+          path: dist/*.exe

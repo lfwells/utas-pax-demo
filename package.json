@@ -1,0 +1,37 @@
+{
+  "name": "utas-pax-demo",
+  "version": "1.0.0",
+  "description": "Pax Demo App",
+  "main": "main.js",
+  "author": "Lindsay Wells",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.utas.pax.demo",
+    "productName": "Pax Demo",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "utas_pax_demo_api/**/*",
+      "utas_pax_demo_flutter/build/web/**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,test,obj,bin}*",
+      "!utas_pax_demo_flutter/build/web/**/*.map"
+    ],
+    "mac": {
+      "target": ["zip", "dir"],
+      "category": "public.app-category.games"
+    },
+    "win": {
+      "target": "portable"
+    },
+    "asar": true 
+  }
+}
