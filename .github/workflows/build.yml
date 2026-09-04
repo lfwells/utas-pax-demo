@@ -29,28 +29,9 @@ jobs:
           flutter build web --release
           cd ..
           
-          # 3. Debug: Verify asset existence and size
-          echo "Verifying games assets..."
-          if (Test-Path "utas_pax_demo_api/games/fishing_trip/Build/TLFT-Build11.data") { 
-            echo "Found Unity data file." 
-            ls "utas_pax_demo_api/games/fishing_trip/Build/TLFT-Build11.data"
-          } else { 
-            echo "CRITICAL: Unity data file NOT found!" 
-          }
-          
-          echo "Verifying flutter assets..."
-          if (Test-Path "utas_pax_demo_flutter/build/web/index.html") { 
-            echo "Found Flutter index file."
-          } else { 
-            echo "CRITICAL: Flutter index NOT found!" 
-          }
-          
-          # 4. Create dist folder
+          # 3. Create dist folder and package the EXE
           mkdir dist
-          
-          # 5. Package the EXE
-          # Using the script from package.json directly
-          npm run package:windows -- --debug
+          npm run package:windows
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
