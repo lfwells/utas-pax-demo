@@ -36,6 +36,21 @@ app.use(express.static(gamesPath, {
   }
 }));
 
+const thumbsPath = path.join(__dirname, 'thumbs');
+console.log('Thumbs path:', thumbsPath);
+if (!fs.existsSync(thumbsPath)) {
+    console.warn('WARNING: Thumbs path does not exist:', thumbsPath);
+}
+
+app.use("/thumbs", express.static(thumbsPath, {
+  fallthrough: false,
+  setHeaders: (res, path) => {
+    if (path.endsWith('.jpg') || path.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/jpeg');
+    }
+  }
+}));
+
 const flutterPath = path.join(__dirname, '..', 'utas_pax_demo_flutter', 'build', 'web');
 console.log('Flutter path:', flutterPath);
 if (!fs.existsSync(flutterPath)) {
