@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 import 'dart:ui_web' as ui_web;
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -157,7 +158,7 @@ class _BaseUrlPageState extends State<BaseUrlPage> {
     final host = uri.host.isEmpty ? 'localhost' : uri.host;
     final port = uri.port == 0 ? 5999 : uri.port;
 
-    final currentBaseUrl = "http://localhost:5001/";//'$protocol://$host:$port/';
+    final currentBaseUrl = kDebugMode ? "http://localhost:5001/" : '$protocol://$host:$port/';
 
     _controller = TextEditingController(text: currentBaseUrl);
 
