@@ -40,6 +40,8 @@ dependencies:
   google_fonts: ^6.2.0
   ffmpeg_kit_flutter: ^6.0.3
   path_provider: ^2.1.1
+  qr_flutter: ^4.1.0
+  flutter_widget_from_html: ^0.17.4
 
 dev_dependencies:
   flutter_test:

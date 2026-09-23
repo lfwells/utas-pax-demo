@@ -1,7 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:ui_web' as ui_web;
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,8 +11,9 @@ import 'package:http/http.dart' as http;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:web/web.dart' as web;
-import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 
 void main() {
   runApp(const MyApp());
@@ -113,16 +115,52 @@ class ModeSelectorPage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      PageRouteBuilder(
-                        pageBuilder: (context, animation, secondaryAnimation) =>
-                            GameGridPage(baseUrl: baseUrl, mode: mode),
-                        transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-                            FadeTransition(opacity: animation, child: child),
-                      ),
-                    );
+                  onPressed: () async {
+                    if (mode == GameMode.video) {
+                      final bool? record = await showDialog<bool>(
+                        context: context,
+                        builder: (BuildContext context) {
+                          return AlertDialog(
+                            title: const Text('Video Mode Configuration'),
+                            content: const Text('Would you like to record this sequence execution to an MP4 file?'),
+                            actions: <Widget>[
+                              TextButton(
+                                child: const Text('Live Playback Only'),
+                                onPressed: () => Navigator.of(context).pop(false),
+                              ),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple, foregroundColor: Colors.white),
+                                child: const Text('Record to MP4'),
+                                onPressed: () => Navigator.of(context).pop(true),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                      if (record == null) return; // Dialogue cancelled
+
+                      if (context.mounted) {
+                        Navigator.push(
+                          context,
+                          PageRouteBuilder(
+                            pageBuilder: (context, animation, secondaryAnimation) =>
+                                GameGridPage(baseUrl: baseUrl, mode: mode, startWithRecording: record),
+                            transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+                                FadeTransition(opacity: animation, child: child),
+                          ),
+                        );
+                      }
+                    } else {
+                      Navigator.push(
+                        context,
+                        PageRouteBuilder(
+                          pageBuilder: (context, animation, secondaryAnimation) =>
+                              GameGridPage(baseUrl: baseUrl, mode: mode),
+                          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+                              FadeTransition(opacity: animation, child: child),
+                        ),
+                      );
+                    }
                   },
                   child: Text(mode.label,
                       style: const TextStyle(
@@ -224,26 +262,44 @@ class Game {
   final String url;
   final String author;
   final String? execute;
+  final String? steam;
   final bool isVideo;
   final String? description;
+  final String? qr;
+  final bool onBooth;
+  final bool showLowerThird;
 
   Game({
     required this.name,
     required this.url,
     required this.author,
     this.execute,
+    this.steam,
     this.isVideo = false,
     this.description,
+    this.qr,
+    this.onBooth = false,
+    this.showLowerThird = true,
   });
 
   factory Game.fromJson(Map<String, dynamic> json) {
+    final rawDescription = json['description'] as String?;
+    final parsedDescription = rawDescription
+        ?.replaceAll('[', '<span style="background-color:#3a3a3c; color:#ffffff; border:1px solid #666666; border-radius:4px; padding:2px 6px; display:inline-block">')
+        .replaceAll(']', '</span>')
+      .replaceAll('\n', '<br>');
+
     return Game(
       name: json['name'] as String,
       url: json['url'] as String,
       author: json['author'] as String? ?? 'Unknown',
       execute: json['execute'] as String?,
+      steam: json['steam'] as String?,
       isVideo: json['video'] as bool? ?? false,
-      description: json['description'] as String?,
+      description: parsedDescription,
+      qr: json['qr'] as String?,
+      onBooth: (json['onBooth'] as bool?) ?? (json['on_booth'] as bool?) ?? false,
+      showLowerThird: (json['showLowerThird'] as bool?) ?? (json['show_lower_third'] as bool?) ?? true,
     );
   }
 }
@@ -251,7 +307,15 @@ class Game {
 class GameGridPage extends StatefulWidget {
   final String baseUrl;
   final GameMode mode;
-  const GameGridPage({super.key, required this.baseUrl, required this.mode});
+  final bool startWithRecording;
+  final double gridSpacing;
+  const GameGridPage({
+    super.key,
+    required this.baseUrl,
+    required this.mode,
+    this.startWithRecording = false,
+    this.gridSpacing = 8.0,
+  });
 
   @override
   State<GameGridPage> createState() => _GameGridPageState();
@@ -261,23 +325,112 @@ class _GameGridPageState extends State<GameGridPage> {
   late Future<List<Game>> _gamesFuture;
   bool _isSequenceRunning = false;
   bool _isRecording = false;
+  final List<Future<void>> _pendingFrameUploads = [];
+
+  Completer<void>? _gridWaitCompleter;
+  int? _nextSequenceIndex;
+
+  void _skipGridWait([int? targetIndex]) {
+    if (widget.mode != GameMode.video) return;
+    if (targetIndex != null) {
+      _nextSequenceIndex = targetIndex;
+    }
+    if (_gridWaitCompleter != null && !_gridWaitCompleter!.isCompleted) {
+      _gridWaitCompleter!.complete();
+    }
+  }
+
+  Future<void> _waitOnGrid(Duration duration) async {
+    _gridWaitCompleter = Completer<void>();
+    await Future.any([
+      Future.delayed(duration),
+      _gridWaitCompleter!.future,
+    ]);
+    _gridWaitCompleter = null;
+  }
 
   @override
   void initState() {
     super.initState();
+    _isRecording = widget.startWithRecording;
     _gamesFuture = _fetchGames();
+    HardwareKeyboard.instance.addHandler(_onKeyEvent);
   }
 
-  Future<void> _recordFrame(Duration simulatedTime) async {
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKeyEvent);
+    super.dispose();
+  }
+
+  bool _onKeyEvent(KeyEvent event) {
+    if (widget.mode != GameMode.video) return false;
+    
+    if (event is KeyDownEvent) {
+      debugPrint('Key pressed: ${event.logicalKey.debugName} - Stopping sequence.');
+      _stopSequenceAndGoBack();
+      return true;
+    }
+    return false;
+  }
+
+  void _stopSequenceAndGoBack() {
+    if (!mounted) return;
+    setState(() {
+      _isRecording = false;
+    });
+
+    final route = ModalRoute.of(context);
+    // If the current route is not this page, it's likely a GameDetailPage
+    if (route != null && !route.isCurrent) {
+      Navigator.of(context).pop(); // Pop GameDetailPage
+    }
+    
+    // Use a small delay or ensure grid is popped if still mounted
+    if (mounted) {
+      Navigator.of(context).pop(); // Pop GameGridPage to return to ModeSelectorPage
+    }
+  }
+
+  Future<void> _recordFrame(Duration simulatedTime, String apiBaseUrl) async {
     final boundary = rootRepaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (boundary != null) {
-      final image = await boundary.toImage(pixelRatio: 2.0);
+      // Capture the pixels - we MUST await this to ensure we capture the current frame state
+      final image = await boundary.toImage(pixelRatio: 1.0);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      
       if (byteData != null) {
-        final tempDir = await getTemporaryDirectory();
         final frameNum = (simulatedTime.inMicroseconds / 16666).round();
-        final file = File('${tempDir.path}/frame_$frameNum.png');
-        await file.writeAsBytes(byteData.buffer.asUint8List());
+        final bytes = byteData.buffer.asUint8List();
+
+
+        debugPrint('Captured frame $frameNum at simulated time ${simulatedTime.inMilliseconds}ms, size: ${bytes.lengthInBytes} bytes');
+        // Concurrently upload the frame.
+        // We do NOT await the HTTP request here so that we can proceed to capture the next frame
+        // as quickly as possible. We track the future to ensure we finish all uploads at the end.
+        final uploadFuture = http.post(
+          Uri.parse('$apiBaseUrl/captureFrame'),
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Frame-Number': frameNum.toString(),
+          },
+          body: bytes,
+        ).then((response) {
+          if (response.statusCode != 200) {
+            debugPrint('Error uploading frame $frameNum: ${response.statusCode}');
+          }
+        }).catchError((e) {
+          debugPrint('Failed to send frame $frameNum: $e');
+        });
+
+        _pendingFrameUploads.add(uploadFuture);
+        
+        // To prevent browser memory exhaustion or request throttling, 
+        // we can periodically wait for a batch of uploads to finish if the queue gets too large.
+        if (_pendingFrameUploads.length > 30) {
+          final oldest = _pendingFrameUploads.removeAt(0);
+          await oldest.catchError((_) {});
+        }
       }
     }
   }
@@ -296,11 +449,20 @@ class _GameGridPageState extends State<GameGridPage> {
   }
 
   Future<void> _playSequenceLive(List<Game> games) async {
+    await Future.delayed(const Duration(seconds: 2));
+
+    debugPrint("Starting live sequence playback for ${games.length} games.");
+
     // Start with a 5-second delay on the grid at the start
-    await Future.delayed(const Duration(seconds: 5));
+    await _waitOnGrid(const Duration(seconds: 5));
 
     int index = 0;
     while (mounted && widget.mode == GameMode.video) {
+      if (_nextSequenceIndex != null) {
+        index = _nextSequenceIndex!;
+        _nextSequenceIndex = null;
+      }
+
       final game = games[index];
       if (!mounted) break;
 
@@ -312,6 +474,7 @@ class _GameGridPageState extends State<GameGridPage> {
             game: game,
             baseUrl: widget.baseUrl,
             mode: widget.mode,
+            isRecording: _isRecording,
           ),
           transitionDuration: const Duration(milliseconds: 500),
           reverseTransitionDuration: const Duration(milliseconds: 500),
@@ -320,27 +483,51 @@ class _GameGridPageState extends State<GameGridPage> {
         ),
       );
 
-      index = (index + 1) % games.length;
+      if (_nextSequenceIndex != null) {
+        index = _nextSequenceIndex!;
+        _nextSequenceIndex = null;
+      } else {
+        index = (index + 1) % games.length;
+      }
+
       // Spend 5 seconds on the grid between videos
-      await Future.delayed(const Duration(seconds: 5));
+      await _waitOnGrid(const Duration(seconds: 5));
     }
   }
 
   Future<void> _playSequenceRecorded(List<Game> games) async {
+    // Capture necessary state before starting potentially long async work
+    final cleanBaseUrl = widget.baseUrl.endsWith('/')
+        ? widget.baseUrl.substring(0, widget.baseUrl.length - 1)
+        : widget.baseUrl;
+    final apiBaseUrl = cleanBaseUrl.replaceAll("/games", "");
+
+    // Escape current frame phase
+    await Future.delayed(const Duration(seconds: 2));
+
     // Deterministic recording at 60 FPS
     const frameInterval = Duration(microseconds: 16666);
-    Duration simulatedTime = Duration.zero;
+    // Start from the current clock time to avoid jumping backwards in internal tickers
+    Duration simulatedTime = SchedulerBinding.instance.currentSystemFrameTimeStamp;
+
+    debugPrint("Start recording frames via HTTP API stream...");
 
     // 1. Initial 5 seconds on grid
     for (int i = 0; i < 5 * 60; i++) {
+      if (!_isRecording) break;
       simulatedTime += frameInterval;
+      
+      await Future.delayed(Duration.zero);
+      
       SchedulerBinding.instance.handleBeginFrame(simulatedTime);
       SchedulerBinding.instance.handleDrawFrame();
-      await _recordFrame(simulatedTime);
+      // Ensure the frame is fully processed and painted before snapshotting
+      await WidgetsBinding.instance.endOfFrame;
+      await _recordFrame(simulatedTime, apiBaseUrl);
     }
 
     int index = 0;
-    while (mounted && widget.mode == GameMode.video) {
+    while (mounted && widget.mode == GameMode.video && _isRecording) {
       final game = games[index];
       if (!mounted) break;
 
@@ -353,6 +540,7 @@ class _GameGridPageState extends State<GameGridPage> {
             game: game,
             baseUrl: widget.baseUrl,
             mode: widget.mode,
+            isRecording: _isRecording,
           ),
           transitionDuration: const Duration(milliseconds: 500),
           transitionsBuilder: (context, animation, secondaryAnimation, child) =>
@@ -360,57 +548,94 @@ class _GameGridPageState extends State<GameGridPage> {
         ),
       );
 
+      // Allow one "real" frame to happen so Navigator can register the transition
+      await Future.delayed(Duration.zero);
+
       for (int i = 0; i < 30; i++) { // 500ms at 60fps = 30 frames
+        if (!_isRecording) break;
         simulatedTime += frameInterval;
+        
+        await Future.delayed(Duration.zero);
+        
         SchedulerBinding.instance.handleBeginFrame(simulatedTime);
         SchedulerBinding.instance.handleDrawFrame();
-        await _recordFrame(simulatedTime);
+        await WidgetsBinding.instance.endOfFrame;
+        await _recordFrame(simulatedTime, apiBaseUrl);
       }
+      if (!_isRecording) break;
 
       // 3. Record Video Playback (We'd need to know duration, assume 10s for demo)
       // Note: toImage does not capture PlatformViews like video elements.
       for (int i = 0; i < 10 * 60; i++) {
+        if (!_isRecording) break;
         simulatedTime += frameInterval;
+        
+        await Future.delayed(Duration.zero);
+        
         SchedulerBinding.instance.handleBeginFrame(simulatedTime);
         SchedulerBinding.instance.handleDrawFrame();
-        await _recordFrame(simulatedTime);
+        await WidgetsBinding.instance.endOfFrame;
+        await _recordFrame(simulatedTime, apiBaseUrl);
       }
+      if (!_isRecording) break;
 
       // 4. Record Navigation Pop Transition (500ms)
-      Navigator.pop(context);
+      if (mounted) Navigator.pop(context);
+      
+      // Allow Navigator to settle the pop
+      await Future.delayed(Duration.zero);
+
       for (int i = 0; i < 30; i++) {
+        if (!_isRecording) break;
         simulatedTime += frameInterval;
+        
+        await Future.delayed(Duration.zero);
+        
         SchedulerBinding.instance.handleBeginFrame(simulatedTime);
         SchedulerBinding.instance.handleDrawFrame();
-        await _recordFrame(simulatedTime);
+        await WidgetsBinding.instance.endOfFrame;
+        await _recordFrame(simulatedTime, apiBaseUrl);
       }
+      if (!_isRecording) break;
 
       index = (index + 1) % games.length;
 
       // 5. 5 seconds on grid between videos
       for (int i = 0; i < 5 * 60; i++) {
+        if (!_isRecording) break;
         simulatedTime += frameInterval;
+        
+        await Future.delayed(Duration.zero);
+
         SchedulerBinding.instance.handleBeginFrame(simulatedTime);
         SchedulerBinding.instance.handleDrawFrame();
-        await _recordFrame(simulatedTime);
+        await WidgetsBinding.instance.endOfFrame;
+        await _recordFrame(simulatedTime, apiBaseUrl);
       }
-      
-      // Stop after one loop for safety in this demo
-      break; 
     }
 
-    // Compile to MP4
-    final tempDir = await getTemporaryDirectory();
-    final outputPath = '${tempDir.path}/output.mp4';
-    final command = '-framerate 60 -i ${tempDir.path}/frame_%d.png -c:v libx264 -pix_fmt yuv420p -y $outputPath';
-    await FFmpegKit.execute(command);
-    debugPrint('Recording saved to $outputPath');
+    // WAIT for all pending uploads to finish before triggering compilation
+    if (_pendingFrameUploads.isNotEmpty) {
+      debugPrint("Waiting for ${_pendingFrameUploads.length} frames to finish uploading...");
+      await Future.wait(_pendingFrameUploads);
+      _pendingFrameUploads.clear();
+    }
+
+    try {
+      await http.post(Uri.parse('$apiBaseUrl/captureEnd'));
+      debugPrint('Recording compilation triggered successfully on backend server.');
+    } catch (e) {
+      debugPrint('Failed to trigger video compilation: $e');
+    }
   }
 
   Future<List<Game>> _fetchGames() async {
     final cleanBaseUrl = widget.baseUrl.endsWith('/')
         ? widget.baseUrl.substring(0, widget.baseUrl.length - 1)
         : widget.baseUrl;
+
+    if (kDebugMode) print('Fetching games from $cleanBaseUrl/${widget.mode.jsonFile}');
+
     final response = await http.get(Uri.parse('$cleanBaseUrl/${widget.mode.jsonFile}'));
     if (response.statusCode == 200) {
       final data = json.decode(response.body) as Map<String, dynamic>;
@@ -433,24 +658,7 @@ class _GameGridPageState extends State<GameGridPage> {
 
   PreferredSizeWidget? _buildAppBar() {
     if (widget.mode == GameMode.video) {
-      return AppBar(
-        automaticallyImplyLeading: false,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(_isRecording ? Icons.stop_circle : Icons.fiber_manual_record, color: Colors.red),
-            onPressed: () {
-              setState(() {
-                _isRecording = !_isRecording;
-              });
-              if (_isRecording && !_isSequenceRunning) {
-                _gamesFuture.then((games) => _playSequence(games));
-              }
-            },
-          ),
-        ],
-      );
+      return null;
     }
 
     return AppBar(
@@ -488,40 +696,69 @@ class _GameGridPageState extends State<GameGridPage> {
   }
 
   Widget _buildUtasGrid(BuildContext context, List<Game> games) {
-    return _buildDefaultGrid(context, games, 3);
-  }
-
-  Widget _buildTasgmGrid(BuildContext context, List<Game> games) {
-    return _buildDefaultGrid(context, games, 2);
-  }
-
-  Widget _buildVideoGrid(BuildContext context, List<Game> games) {
     return _buildDefaultGrid(context, games, 4);
   }
 
-  Widget _buildDefaultGrid(BuildContext context, List<Game> games, int crossAxisCount) {
-    final appBarHeight = widget.mode == GameMode.video ? 0.0 : 64.0;
-    
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final cellWidth = constraints.maxWidth / crossAxisCount;
-        final cellHeight = constraints.maxHeight / 3; // Assume 3 rows for demo
-        final aspectRatio = cellWidth / cellHeight;
+  Widget _buildTasgmGrid(BuildContext context, List<Game> games) {
+    return _buildDefaultGrid(context, games, 3);
+  }
 
-        return GridView.builder(
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            crossAxisSpacing: 0,
-            mainAxisSpacing: 0,
-            childAspectRatio: aspectRatio,
-          ),
-          itemCount: games.length,
-          itemBuilder: (context, index) {
-            final game = games[index];
-            return GameThumb(game: game, gridPage: widget, cleanBaseUrl: widget.baseUrl);
-          },
-        );
-      }
+  Widget _buildVideoGrid(BuildContext context, List<Game> games) {
+    return _buildDefaultGrid(context, games, 2);
+  }
+
+  Widget _buildDefaultGrid(BuildContext context, List<Game> games, int crossAxisCount) {
+    final spacing = widget.gridSpacing;
+
+    return Container(
+      color: Colors.black,
+      padding: EdgeInsets.all(spacing),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableWidth = constraints.maxWidth - (crossAxisCount - 1) * spacing;
+          final cellWidth = availableWidth / crossAxisCount;
+
+          final rowCount = (games.length / crossAxisCount).ceil();
+          final effectiveRows = rowCount < crossAxisCount ? crossAxisCount : rowCount;
+          final availableHeight = constraints.maxHeight - (effectiveRows - 1) * spacing;
+          final cellHeight = availableHeight / effectiveRows;
+
+          final aspectRatio = (cellWidth > 0 && cellHeight > 0)
+              ? cellWidth / cellHeight
+              : 16 / 9;
+
+          Widget grid = GridView.builder(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: spacing,
+              mainAxisSpacing: spacing,
+              childAspectRatio: aspectRatio,
+            ),
+            itemCount: games.length,
+            itemBuilder: (context, index) {
+              final game = games[index];
+              return GameThumb(
+                game: game,
+                gridPage: widget,
+                cleanBaseUrl: widget.baseUrl,
+                onTap: widget.mode == GameMode.video
+                    ? () => _skipGridWait(index)
+                    : null,
+              );
+            },
+          );
+
+          if (widget.mode == GameMode.video) {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _skipGridWait(),
+              child: grid,
+            );
+          }
+
+          return grid;
+        },
+      ),
     );
   }
 
@@ -541,7 +778,7 @@ class _GameGridPageState extends State<GameGridPage> {
             } else if (snapshot.hasError) {
               return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.white)));
             } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Center(child: Text('No games found', style: const TextStyle(color: Colors.white)));
+              return const Center(child: Text('No games found', style: TextStyle(color: Colors.white)));
             }
 
             return _buildModeContent(context, snapshot.data!);
@@ -552,17 +789,109 @@ class _GameGridPageState extends State<GameGridPage> {
   }
 }
 
+class GameImageThumb extends StatelessWidget {
+  final String cleanBaseUrl;
+  final String gameUrl;
+  final BoxFit fit;
+
+  const GameImageThumb({
+    super.key,
+    required this.cleanBaseUrl,
+    required this.gameUrl,
+    this.fit = BoxFit.contain,
+  });
+
+  Widget _buildPair(String imageUrl) {
+    if (fit == BoxFit.cover) {
+      return Image.network(
+        imageUrl,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+      );
+    }
+
+    return ClipRect(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Scaled up & blurred copy to fill letterbox / pillarbox
+          ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
+            child: Image.network(
+              imageUrl,
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
+              errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+            ),
+          ),
+          Container(
+            color: Colors.black.withValues(alpha: 0.25),
+          ),
+          // Primary clear image fitted on shortest side
+          Image.network(
+            imageUrl,
+            fit: BoxFit.contain,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cleanUrl = cleanBaseUrl.endsWith('/')
+        ? cleanBaseUrl.substring(0, cleanBaseUrl.length - 1)
+        : cleanBaseUrl;
+    final pngUrl = "$cleanUrl/_thumbs$gameUrl.png";
+    final jpgUrl = "$cleanUrl/_thumbs$gameUrl.jpg";
+
+    return Image.network(
+      pngUrl,
+      fit: fit,
+      width: double.infinity,
+      height: double.infinity,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (frame == null) return const SizedBox.shrink();
+        return _buildPair(pngUrl);
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return Image.network(
+          jpgUrl,
+          fit: fit,
+          width: double.infinity,
+          height: double.infinity,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            if (frame == null) return const SizedBox.shrink();
+            return _buildPair(jpgUrl);
+          },
+          errorBuilder: (context, error, stackTrace) {
+            return const SizedBox.shrink();
+          },
+        );
+      },
+    );
+  }
+}
+
 class GameThumb extends StatefulWidget {
   const GameThumb({
     super.key,
     required this.game,
     required this.gridPage,
     required this.cleanBaseUrl,
+    this.onTap,
   });
 
   final Game game;
   final GameGridPage gridPage;
   final String cleanBaseUrl;
+  final VoidCallback? onTap;
 
   @override
   State<GameThumb> createState() => _GameThumbState();
@@ -583,20 +912,54 @@ class _GameThumbState extends State<GameThumb> {
     ui_web.platformViewRegistry.registerViewFactory(
       _videoViewId,
       (int id) {
-        final video = web.document.createElement('video') as web.HTMLVideoElement;
         final cleanBaseUrl = widget.cleanBaseUrl.endsWith('/')
             ? widget.cleanBaseUrl.substring(0, widget.cleanBaseUrl.length - 1)
             : widget.cleanBaseUrl;
-        video.src = '$cleanBaseUrl/_thumbs${widget.game.url}.mp4';
-        video.style.border = 'none';
-        video.style.width = '100%';
-        video.style.height = '100%';
-        video.style.objectFit = 'cover';
-        video.autoplay = true;
-        video.loop = true;
-        video.muted = true;
-        video.setAttribute('playsinline', 'true');
-        return video;
+        final videoUrl = '$cleanBaseUrl/_thumbs${widget.game.url}.mp4';
+
+        final container = web.document.createElement('div') as web.HTMLDivElement;
+        container.style.position = 'relative';
+        container.style.width = '100%';
+        container.style.height = '100%';
+        container.style.overflow = 'hidden';
+        container.style.backgroundColor = 'black';
+
+        // Background duplicate video - scaled up and blurred
+        final videoBg = web.document.createElement('video') as web.HTMLVideoElement;
+        videoBg.src = videoUrl;
+        videoBg.style.position = 'absolute';
+        videoBg.style.top = '0';
+        videoBg.style.left = '0';
+        videoBg.style.width = '100%';
+        videoBg.style.height = '100%';
+        videoBg.style.objectFit = 'cover';
+        videoBg.style.filter = 'blur(20px) brightness(0.7)';
+        videoBg.style.transform = 'scale(1.1)';
+        videoBg.autoplay = true;
+        videoBg.loop = true;
+        videoBg.muted = true;
+        videoBg.setAttribute('playsinline', 'true');
+
+        // Foreground primary video - fit on shortest side
+        final videoFg = web.document.createElement('video') as web.HTMLVideoElement;
+        videoFg.src = videoUrl;
+        videoFg.style.position = 'absolute';
+        videoFg.style.top = '0';
+        videoFg.style.left = '0';
+        videoFg.style.width = '100%';
+        videoFg.style.height = '100%';
+        videoFg.style.objectFit = 'contain';
+        videoFg.autoplay = true;
+        videoFg.loop = true;
+        videoFg.muted = true;
+        videoFg.setAttribute('playsinline', 'true');
+
+        videoFg.onPlay.listen((_) => videoBg.play());
+        videoFg.onPause.listen((_) => videoBg.pause());
+
+        container.appendChild(videoBg);
+        container.appendChild(videoFg);
+        return container;
       },
     );
 
@@ -630,19 +993,36 @@ class _GameThumbState extends State<GameThumb> {
     final showVideoPreview = isVideoMode && _useVideo;
 
     if (isVideoMode) {
-      return Hero(
-        tag: widget.game.name,
-        child: Material(
-          color: const Color(0xFF1E1E1E),
-          child: SizedBox.expand(
-            child: showVideoPreview
-                ? PointerInterceptor(
-                    child: HtmlElementView(viewType: _videoViewId),
-                  )
-                : Image.network(
-                    "$cleanBaseUrl/_thumbs${widget.game.url}.png",
-                    fit: BoxFit.cover,
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Hero(
+          tag: widget.game.name,
+          child: Material(
+            color: const Color(0xFF1E1E1E),
+            child: SizedBox.expand(
+              child: Stack(
+                children: [
+                  if (showVideoPreview)
+                    PointerInterceptor(
+                      child: HtmlElementView(viewType: _videoViewId),
+                    )
+                  else
+                    GameImageThumb(
+                      cleanBaseUrl: cleanBaseUrl,
+                      gameUrl: widget.game.url,
+                      fit: BoxFit.contain,
+                    ),
+                  Positioned.fill(
+                    child: PointerInterceptor(
+                      child: Container(
+                        color: Colors.transparent,
+                      ),
+                    ),
                   ),
+                ],
+              ),
+            ),
           ),
         ),
       );
@@ -679,7 +1059,8 @@ class _GameThumbState extends State<GameThumb> {
           tag: widget.game.name,
           child: Material(
             color: const Color(0xFF1E1E1E),
-            child: Stack(
+            child: ClipRect(
+              child: Stack(
               children: [
                 TweenAnimationBuilder<double>(
                   tween: Tween<double>(begin: 0.0, end: _isHovered ? 7.0 : 0.0),
@@ -700,11 +1081,10 @@ class _GameThumbState extends State<GameThumb> {
                         ? PointerInterceptor(
                             child: HtmlElementView(viewType: _videoViewId),
                           )
-                        : Image.network(
-                            "$cleanBaseUrl/_thumbs${widget.game.url}.png",
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
+                        : GameImageThumb(
+                            cleanBaseUrl: cleanBaseUrl,
+                            gameUrl: widget.game.url,
+                            fit: BoxFit.contain,
                           ),
                   ),
                 ),
@@ -716,43 +1096,46 @@ class _GameThumbState extends State<GameThumb> {
                 ),
                 AnimatedOpacity(
                   duration: const Duration(milliseconds: 250),
-                  opacity: _isHovered ? 1.0 : 0.0,
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          widget.game.name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 24,
-                            shadows: [
-                              Shadow(
-                                offset: Offset(0, 2),
-                                blurRadius: 4,
-                                color: Colors.black54,
-                              ),
-                            ],
+                  opacity: (widget.gridPage.mode != GameMode.video && _isHovered) ? 1.0 : 0.0,
+                  child: Container(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            widget.game.name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 24,
+                              shadows: [
+                                Shadow(
+                                  offset: Offset(0, 2),
+                                  blurRadius: 4,
+                                  color: Colors.black54,
+                                ),
+                              ],
+                            ),
+                            textAlign: TextAlign.center,
                           ),
-                          textAlign: TextAlign.center,
-                        ),
-                        Text(
-                          widget.game.author,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            shadows: [
-                              Shadow(
-                                offset: Offset(0, 1),
-                                blurRadius: 2,
-                                color: Colors.black54,
-                              ),
-                            ],
+                          Text(
+                            widget.game.author,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              shadows: [
+                                Shadow(
+                                  offset: Offset(0, 1),
+                                  blurRadius: 2,
+                                  color: Colors.black54,
+                                ),
+                              ],
+                            ),
+                            textAlign: TextAlign.center,
                           ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -761,7 +1144,8 @@ class _GameThumbState extends State<GameThumb> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }
 
@@ -769,8 +1153,15 @@ class GameDetailPage extends StatefulWidget {
   final Game game;
   final String baseUrl;
   final GameMode mode;
+  final bool isRecording;
 
-  const GameDetailPage({super.key, required this.game, required this.baseUrl, required this.mode});
+  const GameDetailPage({
+    super.key,
+    required this.game,
+    required this.baseUrl,
+    required this.mode,
+    this.isRecording = false,
+  });
 
   @override
   State<GameDetailPage> createState() => _GameDetailPageState();
@@ -788,14 +1179,18 @@ class _GameDetailPageState extends State<GameDetailPage> {
     super.initState();
     _viewId = 'detail-view-${widget.game.name.replaceAll(' ', '-')}';
 
-    _hasDescription = widget.game.description != null && widget.game.description!.isNotEmpty;
-    if (_hasDescription && !widget.game.isVideo) {
+    _hasDescription = (widget.game.description != null && widget.game.description!.isNotEmpty) ||
+        (widget.game.qr != null && widget.game.qr!.isNotEmpty);
+    if (_hasDescription && !widget.game.isVideo && widget.mode != GameMode.video) {
       _showDescription = true;
     }
 
     if (widget.game.execute != null) {
       _isExecuting = true;
       _handleExecute();
+    } else if (widget.game.steam != null) {
+      _isExecuting = true;
+      _handleSteam();
     } else {
       // Register the platform view factory for either video or iframe
       // ignore: undefined_prefixed_name
@@ -807,18 +1202,57 @@ class _GameDetailPageState extends State<GameDetailPage> {
               : widget.baseUrl;
           
           if (widget.game.isVideo || widget.mode == GameMode.video) {
-            final video = web.document.createElement('video') as web.HTMLVideoElement;
-            video.src = '$cleanBaseUrl/_thumbs${widget.game.url}.mp4';
-            video.style.border = 'none';
-            video.style.width = '100%';
-            video.style.height = '100%';
-            video.style.objectFit = 'cover';
-            video.autoplay = true;
-            video.controls = false;
-            video.onEnded.listen((_) {
+            final videoUrl = '$cleanBaseUrl/_thumbs${widget.game.url}.mp4';
+
+            final container = web.document.createElement('div') as web.HTMLDivElement;
+            container.style.position = 'relative';
+            container.style.width = '100%';
+            container.style.height = '100%';
+            container.style.overflow = 'hidden';
+            container.style.backgroundColor = 'black';
+
+            // Background duplicate video - scaled up and blurred
+            final videoBg = web.document.createElement('video') as web.HTMLVideoElement;
+            videoBg.src = videoUrl;
+            videoBg.style.position = 'absolute';
+            videoBg.style.top = '0';
+            videoBg.style.left = '0';
+            videoBg.style.width = '100%';
+            videoBg.style.height = '100%';
+            videoBg.style.objectFit = 'cover';
+            videoBg.style.filter = 'blur(20px) brightness(0.7)';
+            videoBg.style.transform = 'scale(1.1)';
+            videoBg.autoplay = true;
+            videoBg.loop = true;
+            videoBg.muted = true;
+            videoBg.setAttribute('playsinline', 'true');
+
+            // Foreground primary video - fit on shortest side
+            final videoFg = web.document.createElement('video') as web.HTMLVideoElement;
+            videoFg.src = videoUrl;
+            videoFg.style.position = 'absolute';
+            videoFg.style.top = '0';
+            videoFg.style.left = '0';
+            videoFg.style.width = '100%';
+            videoFg.style.height = '100%';
+            videoFg.style.objectFit = 'contain';
+            videoFg.autoplay = true;
+            videoFg.controls = false;
+            videoFg.style.cursor = 'pointer';
+            videoFg.setAttribute('playsinline', 'true');
+
+            videoFg.onPlay.listen((_) => videoBg.play());
+            videoFg.onPause.listen((_) => videoBg.pause());
+            videoFg.onClick.listen((_) {
               if (mounted) Navigator.of(context).pop();
             });
-            return video;
+            videoFg.onEnded.listen((_) {
+              if (mounted) Navigator.of(context).pop();
+            });
+
+            container.appendChild(videoBg);
+            container.appendChild(videoFg);
+            return container;
           } else {
             final iframe = web.document.createElement('iframe') as web.HTMLIFrameElement;
             iframe.src = '$cleanBaseUrl${widget.game.url}';
@@ -879,6 +1313,73 @@ class _GameDetailPageState extends State<GameDetailPage> {
     }
   }
 
+  Future<void> _handleSteam() async {
+    final cleanBaseUrl = widget.baseUrl.endsWith('/')
+        ? widget.baseUrl.substring(0, widget.baseUrl.length - 1)
+        : widget.baseUrl;
+    final apiBaseUrl = cleanBaseUrl.replaceAll("/games", "");
+    
+    try {
+      await http.get(Uri.parse('$apiBaseUrl/steam/${widget.game.steam}'));
+    } catch (e) {
+      debugPrint('Steam launch failed: $e');
+    }
+  }
+
+  Widget _buildQrCode(String qrData, String cleanBaseUrl, {double size = 76}) {
+    final isImage = qrData.toLowerCase().endsWith('.png') ||
+        qrData.toLowerCase().endsWith('.jpg') ||
+        qrData.toLowerCase().endsWith('.jpeg') ||
+        qrData.toLowerCase().endsWith('.svg') ||
+        qrData.toLowerCase().endsWith('.webp');
+
+    Widget qrWidget;
+    if (isImage) {
+      final imageUrl = qrData.startsWith('http://') || qrData.startsWith('https://')
+          ? qrData
+          : (qrData.startsWith('/') ? '$cleanBaseUrl$qrData' : '$cleanBaseUrl/$qrData');
+      qrWidget = Image.network(
+        imageUrl,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          return QrImageView(
+            data: qrData,
+            version: QrVersions.auto,
+            size: size,
+            backgroundColor: Colors.white,
+          );
+        },
+      );
+    } else {
+      qrWidget = QrImageView(
+        data: qrData,
+        version: QrVersions.auto,
+        size: size,
+        backgroundColor: Colors.white,
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: qrWidget,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cleanBaseUrl = widget.baseUrl.endsWith('/')
@@ -912,6 +1413,11 @@ class _GameDetailPageState extends State<GameDetailPage> {
                   ],
                 ),
                 actions: [
+                  if (_hasDescription && !_showDescription && widget.mode != GameMode.video)
+                    IconButton(
+                      icon: const Icon(Icons.info_outline),
+                      onPressed: () => setState(() => _showDescription = true),
+                    ),
                   Padding(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 8.0, vertical: 16.0),
@@ -928,170 +1434,238 @@ class _GameDetailPageState extends State<GameDetailPage> {
           tag: widget.game.name,
           child: Material(
             color: Colors.black, // Ensure details card material has black backdrop for full-screen views
-            child: SizedBox.expand(
-              child: Stack(
+            child: Column(
               children: [
-
-                if (!widget.game.isVideo) ...[
-                  Positioned.fill(
-                    child: ImageFiltered(
-                      imageFilter: ui.ImageFilter.blur(sigmaX: 7.0, sigmaY: 7.0),
-                      child: Image.network(
-                        "$cleanBaseUrl/_thumbs${widget.game.url}.png",
-                        fit: BoxFit.cover,
-                      ),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  child: (_showDescription && widget.mode != GameMode.video)
+                      ? GestureDetector(
+                          onTap: () => setState(() => _showDescription = false),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16.0, vertical: 8.0),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: (widget.game.description != null &&
+                                          widget.game.description!.isNotEmpty)
+                                      ? HtmlWidget(
+                                          widget.game.description!,
+                                          /*style: const TextStyle(
+                                            fontSize: 18,
+                                            height: 1.4,
+                                          ),*/
+                                        )
+                                      : const SizedBox.shrink(),
+                                ),
+                                if (widget.game.qr != null &&
+                                    widget.game.qr!.isNotEmpty) ...[
+                                  const SizedBox(width: 16),
+                                  _buildQrCode(widget.game.qr!, cleanBaseUrl),
+                                ],
+                              ],
+                            ),
+                          ),
+                        )
+                      : const SizedBox(width: double.infinity, height: 0),
+                ),
+                Expanded(
+                  child: SizedBox.expand(
+                    child: Stack(
+                      children: [
+                // Always render the thumbnail as a backdrop.
+                // This ensures the recorder has pixels to capture instead of a grey square.
+                Positioned.fill(
+                  child: ImageFiltered(
+                    imageFilter: (widget.game.isVideo || widget.mode == GameMode.video)
+                        ? ui.ImageFilter.blur(sigmaX: 0, sigmaY: 0) // Clear for video
+                        : ui.ImageFilter.blur(sigmaX: 7.0, sigmaY: 7.0), // Blurred for games
+                    child: GameImageThumb(
+                      cleanBaseUrl: cleanBaseUrl,
+                      gameUrl: widget.game.url,
+                      fit: BoxFit.cover,
                     ),
                   ),
+                ),
+                if (!widget.game.isVideo && widget.mode != GameMode.video)
                   Positioned.fill(
                     child: Container(
                       color: Colors.white.withValues(alpha: 0.2),
                     ),
                   ),
-                ],
-
-
-                SizedBox.expand(
-                  child: _isExecuting
-                    ? const Center(
-                        child: Text(
-                          "Launching...",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      )
-                    : (_showHtml
-                      ? PointerInterceptor(
-                          intercepting: !_showDescription,
-                          child: HtmlElementView(viewType: _viewId),
-                        )
-                      : Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                widget.game.name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 24,
-                                  shadows: [
-                                    Shadow(
-                                      offset: Offset(0, 2),
-                                      blurRadius: 4,
-                                      color: Colors.black54,
-                                    ),
-                                  ],
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                              Text(
-                                widget.game.author,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  shadows: [
-                                    Shadow(
-                                      offset: Offset(0, 1),
-                                      blurRadius: 2,
-                                      color: Colors.black54,
-                                    ),
-                                  ],
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        )),
-                ),
-
-
-                if (_hasDescription && !widget.game.isVideo && widget.mode != GameMode.video) ...[
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                    left: 0,
-                    right: 0,
-                    bottom: _showDescription ? 0 : -MediaQuery.of(context).size.height / 3,
-                    height: MediaQuery.of(context).size.height / 3,
-                    child: GestureDetector(
-                      onTap: () => setState(() => _showDescription = false),
-                      child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.3),
-                                blurRadius: 10,
-                                spreadRadius: 2,
-                              ),
-                            ],
-                          ),
-                          padding: const EdgeInsets.all(24),
-                          child: SingleChildScrollView(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.game.name,
-                                  style: const TextStyle(
-                                    fontSize: 24,
+                        SizedBox.expand(
+                          child: _isExecuting
+                            ? const Center(
+                                child: Text(
+                                  "Launching...",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 32,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.black,
                                   ),
                                 ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  widget.game.description!,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    color: Colors.black87,
-                                    height: 1.4,
+                              )
+                            : (_showHtml
+                              ? PointerInterceptor(
+                                  intercepting: !_showDescription,
+                                  child: HtmlElementView(viewType: _viewId),
+                                )
+                              : Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        widget.game.name,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 24,
+                                          shadows: [
+                                            Shadow(
+                                              offset: Offset(0, 2),
+                                              blurRadius: 4,
+                                              color: Colors.black54,
+                                            ),
+                                          ],
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      Text(
+                                        widget.game.author,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          shadows: [
+                                            Shadow(
+                                              offset: Offset(0, 1),
+                                              blurRadius: 2,
+                                              color: Colors.black54,
+                                            ),
+                                          ],
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
                                   ),
+                                )),
+                        ),
+                        if (widget.mode == GameMode.video)
+                          Positioned.fill(
+                            child: PointerInterceptor(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () {
+                                  if (mounted) {
+                                    Navigator.of(context).pop();
+                                  }
+                                },
+                                child: Container(
+                                  color: Colors.transparent,
                                 ),
-                              ],
+                              ),
                             ),
                           ),
-                        ),
-                    ),
+                        if (widget.mode == GameMode.video) ...[
+                          if (widget.game.showLowerThird)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 32),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.65),
 
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            widget.game.name,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 32,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            widget.game.author,
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 20,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (widget.game.qr != null && widget.game.qr!.isNotEmpty) ...[
+                                      const SizedBox(width: 24),
+                                      _buildQrCode(widget.game.qr!, cleanBaseUrl, size: 100),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (widget.game.onBooth)
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              width: 320,
+                              height: 320,
+                              child: ClipRect(
+                                child: Stack(
+                                  children: [
+                                    Positioned(
+                                      top: 80,
+                                      right: -80,
+                                      child: Transform.rotate(
+                                        angle: math.pi / 4,
+                                        child: Container(
+                                          width: 360,
+                                          padding: const EdgeInsets.symmetric(vertical: 12),
+                                          decoration: const BoxDecoration(
+                                            color: Color(0xFFE53935),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black54,
+                                                blurRadius: 8,
+                                                offset: Offset(0, 4),
+                                              ),
+                                            ],
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: const Text(
+                                            'PLAY ON THE BOOTH',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1.4,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ],
+                    ),
                   ),
-
-                  if (!_showDescription && widget.mode != GameMode.video)
-                    Positioned(
-                      bottom: 20,
-                      right: 20,
-                      child: FloatingActionButton(
-                        mini: true,
-                        backgroundColor: Colors.deepPurple,
-                        foregroundColor: Colors.white,
-                        onPressed: () => setState(() => _showDescription = true),
-                        child: const Icon(Icons.info_outline),
-                      ),
-                    ),
-
-                ],
-
-                if (widget.mode == GameMode.video)
-                  Positioned(
-                      left:64,
-                      right: 0,
-                      bottom: 64,
-                      height: 200,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(widget.game.name, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
-                          Text(widget.game.author, style: const TextStyle(fontSize: 20))
-                        ]
-                      )
                 ),
               ],
-              )
-          ),
+            ),
           ),
         ),
       ),
