@@ -214,7 +214,7 @@ if (!fs.existsSync(flutterPath)) {
 app.use(express.static(flutterPath));
 
 // Catch-all to handle Flutter routing
-app.get('*', (req, res) => {
+app.get(/(.*)/, (req, res) => {
   const indexPath = path.join(flutterPath, 'index.html');
   if (fs.existsSync(indexPath)) {
     res.sendFile(indexPath);
