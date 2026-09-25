@@ -81,10 +81,14 @@ app.use("/games", (req, res, next) => {
 });
 
 app.post("/execute", (req, res) => {
-  const command = req.body.command;
+  let command = req.body.command;
   if (!command) {
     return res.status(400).send('Missing command parameter');
   }
+
+  //if exe found in the command, replace with .app
+  command = command.replace(/\.exe/g, '.app');
+
   const exec = require('child_process').exec;
   exec(command, (error, stdout, stderr) => {
     if (error) {

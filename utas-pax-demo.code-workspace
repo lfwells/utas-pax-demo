@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../utas-pax-demo-games/games"
+		}
+	],
+	"settings": {
+		"svn.ignoreMissingSvnWarning": true
+	}
+}

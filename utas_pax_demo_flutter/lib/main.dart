@@ -454,7 +454,7 @@ class _GameGridPageState extends State<GameGridPage> {
     debugPrint("Starting live sequence playback for ${games.length} games.");
 
     // Start with a 5-second delay on the grid at the start
-    await _waitOnGrid(const Duration(seconds: 5));
+    await _waitOnGrid(const Duration(seconds: 10));
 
     int index = 0;
     while (mounted && widget.mode == GameMode.video) {
@@ -704,7 +704,7 @@ class _GameGridPageState extends State<GameGridPage> {
   }
 
   Widget _buildVideoGrid(BuildContext context, List<Game> games) {
-    return _buildDefaultGrid(context, games, 2);
+    return _buildDefaultGrid(context, games, 4);
   }
 
   Widget _buildDefaultGrid(BuildContext context, List<Game> games, int crossAxisCount) {
