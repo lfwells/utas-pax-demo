@@ -44,6 +44,16 @@ function getGamesPath() {
   return app.get('gamesPath') || path.join(__dirname, 'games');
 }
 
+app.get("/index", (req, res) => {
+  const gamesPath = getGamesPath();
+  //list all the json files in the gamesPath directory, except package.json and package-lock.json, and return their contents as an array of JSON objects
+  const jsonFiles = fs.readdirSync(gamesPath).filter(file => file.endsWith('.json') && file !== 'package.json' && file !== 'package-lock.json');
+  const jsonData = jsonFiles.map(file => {
+    const filePath = path.join(gamesPath, file);
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  });
+  res.json(jsonData);
+});
 // Serve static files with correct MIME types
 app.use("/games", (req, res, next) => {
   const gamesPath = getGamesPath();

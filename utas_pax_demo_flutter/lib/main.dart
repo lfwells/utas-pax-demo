@@ -328,12 +328,81 @@ class _GameGridPageState extends State<GameGridPage> {
   final List<Future<void>> _pendingFrameUploads = [];
 
   Completer<void>? _gridWaitCompleter;
+  Completer<void>? _fullscreenWaitCompleter;
   int? _nextSequenceIndex;
+  int? _expandedVideoIndex;
+  int? _topTileIndex;
+  Timer? _topTileTimer;
+
+  final Map<int, GlobalKey<_GameThumbState>> _thumbKeys = {};
+  final Map<int, GlobalKey> _tileGlobalKeys = {};
+
+  GlobalKey<_GameThumbState> _getThumbKey(int index) {
+    return _thumbKeys.putIfAbsent(index, () => GlobalKey<_GameThumbState>());
+  }
+
+  GlobalKey _getTileGlobalKey(int index) {
+    return _tileGlobalKeys.putIfAbsent(index, () => GlobalKey());
+  }
+
+  void _alignThumb(int index, double leadTime) {
+    _getThumbKey(index).currentState?.alignVideoToLoopStart(leadTime);
+  }
+
+  void _expandVideo(int index) {
+    if (mounted) {
+      _topTileTimer?.cancel();
+      setState(() {
+        _expandedVideoIndex = index;
+        _topTileIndex = index;
+      });
+    }
+  }
+
+  void _collapseVideo() {
+    if (mounted) {
+      setState(() {
+        _expandedVideoIndex = null;
+      });
+      _topTileTimer?.cancel();
+      _topTileTimer = Timer(const Duration(milliseconds: 550), () {
+        if (mounted) {
+          setState(() {
+            _topTileIndex = null;
+          });
+        }
+      });
+    }
+  }
+
+  void skipFullscreenWait() {
+    _skipFullscreenWait();
+  }
+
+  void _skipFullscreenWait() {
+    if (_fullscreenWaitCompleter != null && !_fullscreenWaitCompleter!.isCompleted) {
+      _fullscreenWaitCompleter!.complete();
+    }
+  }
+
+  Future<void> _waitOnFullscreen(Duration duration) async {
+    _fullscreenWaitCompleter = Completer<void>();
+    await Future.any([
+      Future.delayed(duration),
+      _fullscreenWaitCompleter!.future,
+    ]);
+    _fullscreenWaitCompleter = null;
+  }
 
   void _skipGridWait([int? targetIndex]) {
     if (widget.mode != GameMode.video) return;
+    if (_expandedVideoIndex != null) {
+      _skipFullscreenWait();
+      return;
+    }
     if (targetIndex != null) {
       _nextSequenceIndex = targetIndex;
+      _alignThumb(targetIndex, 0.5);
     }
     if (_gridWaitCompleter != null && !_gridWaitCompleter!.isCompleted) {
       _gridWaitCompleter!.complete();
@@ -365,31 +434,16 @@ class _GameGridPageState extends State<GameGridPage> {
 
   bool _onKeyEvent(KeyEvent event) {
     if (widget.mode != GameMode.video) return false;
-    
-    if (event is KeyDownEvent) {
-      debugPrint('Key pressed: ${event.logicalKey.debugName} - Stopping sequence.');
-      _stopSequenceAndGoBack();
+
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
+      if (_expandedVideoIndex != null) {
+        _skipFullscreenWait();
+      } else {
+        _skipGridWait();
+      }
       return true;
     }
     return false;
-  }
-
-  void _stopSequenceAndGoBack() {
-    if (!mounted) return;
-    setState(() {
-      _isRecording = false;
-    });
-
-    final route = ModalRoute.of(context);
-    // If the current route is not this page, it's likely a GameDetailPage
-    if (route != null && !route.isCurrent) {
-      Navigator.of(context).pop(); // Pop GameDetailPage
-    }
-    
-    // Use a small delay or ensure grid is popped if still mounted
-    if (mounted) {
-      Navigator.of(context).pop(); // Pop GameGridPage to return to ModeSelectorPage
-    }
   }
 
   Future<void> _recordFrame(Duration simulatedTime, String apiBaseUrl) async {
@@ -454,7 +508,8 @@ class _GameGridPageState extends State<GameGridPage> {
     debugPrint("Starting live sequence playback for ${games.length} games.");
 
     // Start with a 5-second delay on the grid at the start
-    await _waitOnGrid(const Duration(seconds: 10));
+    _alignThumb(0, 5.5);
+    await _waitOnGrid(const Duration(seconds: 5));
 
     int index = 0;
     while (mounted && widget.mode == GameMode.video) {
@@ -463,25 +518,22 @@ class _GameGridPageState extends State<GameGridPage> {
         _nextSequenceIndex = null;
       }
 
-      final game = games[index];
       if (!mounted) break;
 
-      await Navigator.push(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              GameDetailPage(
-            game: game,
-            baseUrl: widget.baseUrl,
-            mode: widget.mode,
-            isRecording: _isRecording,
-          ),
-          transitionDuration: const Duration(milliseconds: 500),
-          reverseTransitionDuration: const Duration(milliseconds: 500),
-          transitionsBuilder:
-              (context, animation, secondaryAnimation, child) => child,
-        ),
-      );
+      // 1. Expand video at index to full screen
+      _expandVideo(index);
+
+      // 2. Play full screen for video duration (or max 30s)
+      final thumbState = _getThumbKey(index).currentState;
+      final dur = thumbState?.videoDuration;
+      final waitDuration = (dur != null && dur > 0 && !dur.isNaN)
+          ? Duration(milliseconds: (dur * 1000).round())
+          : const Duration(seconds: 15);
+
+      await _waitOnFullscreen(waitDuration);
+
+      // 3. Collapse video back to grid
+      _collapseVideo();
 
       if (_nextSequenceIndex != null) {
         index = _nextSequenceIndex!;
@@ -489,6 +541,9 @@ class _GameGridPageState extends State<GameGridPage> {
       } else {
         index = (index + 1) % games.length;
       }
+
+      // Align upcoming thumbnail video so it loops to 0:00 right as it becomes full screen
+      _alignThumb(index, 5.5);
 
       // Spend 5 seconds on the grid between videos
       await _waitOnGrid(const Duration(seconds: 5));
@@ -704,7 +759,288 @@ class _GameGridPageState extends State<GameGridPage> {
   }
 
   Widget _buildVideoGrid(BuildContext context, List<Game> games) {
-    return _buildDefaultGrid(context, games, 4);
+    final spacing = widget.gridSpacing;
+    const crossAxisCount = 4;
+
+    return Container(
+      color: Colors.black,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableWidth = constraints.maxWidth - (crossAxisCount + 1) * spacing;
+          final cellWidth = availableWidth / crossAxisCount;
+
+          final rowCount = (games.length / crossAxisCount).ceil();
+          final effectiveRows = rowCount < crossAxisCount ? crossAxisCount : rowCount;
+          final availableHeight = constraints.maxHeight - (effectiveRows + 1) * spacing;
+          final cellHeight = availableHeight / effectiveRows;
+
+          List<Widget> tiles = [];
+
+          // 1. Static placeholder tiles in grid slots so slots never appear empty
+          for (int i = 0; i < games.length; i++) {
+            final left = spacing + (i % crossAxisCount) * (cellWidth + spacing);
+            final top = spacing + (i ~/ crossAxisCount) * (cellHeight + spacing);
+            tiles.add(
+              Positioned(
+                key: Key('grid-placeholder-$i'),
+                left: left,
+                top: top,
+                width: cellWidth,
+                height: cellHeight,
+                child: Material(
+                  color: const Color(0xFF1E1E1E),
+                  child: ClipRect(
+                    child: GameImageThumb(
+                      cleanBaseUrl: widget.baseUrl,
+                      gameUrl: games[i].url,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          // 2. Add non-top tiles next
+          for (int i = 0; i < games.length; i++) {
+            if (i != _topTileIndex) {
+              tiles.add(
+                _buildVideoTile(
+                  index: i,
+                  game: games[i],
+                  isExpanded: (_expandedVideoIndex == i),
+                  cellLeft: spacing + (i % crossAxisCount) * (cellWidth + spacing),
+                  cellTop: spacing + (i ~/ crossAxisCount) * (cellHeight + spacing),
+                  cellWidth: cellWidth,
+                  cellHeight: cellHeight,
+                  screenWidth: constraints.maxWidth,
+                  screenHeight: constraints.maxHeight,
+                ),
+              );
+            }
+          }
+
+          // 3. Add top tile last so it sits on top in Z-order during both expansion & collapse
+          if (_topTileIndex != null && _topTileIndex! < games.length) {
+            final i = _topTileIndex!;
+            tiles.add(
+              _buildVideoTile(
+                index: i,
+                game: games[i],
+                isExpanded: (_expandedVideoIndex == i),
+                cellLeft: spacing + (i % crossAxisCount) * (cellWidth + spacing),
+                cellTop: spacing + (i ~/ crossAxisCount) * (cellHeight + spacing),
+                cellWidth: cellWidth,
+                cellHeight: cellHeight,
+                screenWidth: constraints.maxWidth,
+                screenHeight: constraints.maxHeight,
+              ),
+            );
+          }
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (_expandedVideoIndex != null) {
+                _skipFullscreenWait();
+              } else {
+                _skipGridWait();
+              }
+            },
+            child: Stack(
+              children: tiles,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildVideoTile({
+    required int index,
+    required Game game,
+    required bool isExpanded,
+    required double cellLeft,
+    required double cellTop,
+    required double cellWidth,
+    required double cellHeight,
+    required double screenWidth,
+    required double screenHeight,
+  }) {
+    final cleanBaseUrl = widget.baseUrl.endsWith('/')
+        ? widget.baseUrl.substring(0, widget.baseUrl.length - 1)
+        : widget.baseUrl;
+
+    return VideoTileWidget(
+      key: _getTileGlobalKey(index),
+      index: index,
+      game: game,
+      isExpanded: isExpanded,
+      cellLeft: cellLeft,
+      cellTop: cellTop,
+      cellWidth: cellWidth,
+      cellHeight: cellHeight,
+      screenWidth: screenWidth,
+      screenHeight: screenHeight,
+      onTap: () {
+        if (isExpanded) {
+          _skipFullscreenWait();
+        } else {
+          _skipGridWait(index);
+        }
+      },
+      lowerThird: game.showLowerThird
+          ? Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 32),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.65),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            game.name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 32,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            game.author,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 20,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (game.qr != null && game.qr!.isNotEmpty) ...[
+                      const SizedBox(width: 24),
+                      _buildQrCode(game.qr!, cleanBaseUrl, size: 100),
+                    ],
+                  ],
+                ),
+              ),
+            )
+          : const SizedBox.shrink(),
+      boothRibbon: game.onBooth
+          ? Positioned(
+              top: 0,
+              right: 0,
+              width: 320,
+              height: 320,
+              child: ClipRect(
+                child: Stack(
+                  children: [
+                    Positioned(
+                      top: 80,
+                      right: -80,
+                      child: Transform.rotate(
+                        angle: math.pi / 4,
+                        child: Container(
+                          width: 360,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFE53935),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black54,
+                                blurRadius: 8,
+                                offset: Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          alignment: Alignment.center,
+                          child: const Text(
+                            'PLAY ON THE BOOTH',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.4,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : const SizedBox.shrink(),
+      child: GameThumb(
+        key: _getThumbKey(index),
+        game: game,
+        gridPage: widget,
+        cleanBaseUrl: widget.baseUrl,
+      ),
+    );
+  }
+
+  Widget _buildQrCode(String qrData, String cleanBaseUrl, {double size = 76}) {
+    final isImage = qrData.toLowerCase().endsWith('.png') ||
+        qrData.toLowerCase().endsWith('.jpg') ||
+        qrData.toLowerCase().endsWith('.jpeg') ||
+        qrData.toLowerCase().endsWith('.svg') ||
+        qrData.toLowerCase().endsWith('.webp');
+
+    Widget qrWidget;
+    if (isImage) {
+      final imageUrl = qrData.startsWith('http://') || qrData.startsWith('https://')
+          ? qrData
+          : (qrData.startsWith('/') ? '$cleanBaseUrl$qrData' : '$cleanBaseUrl/$qrData');
+      qrWidget = Image.network(
+        imageUrl,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          return QrImageView(
+            data: qrData,
+            version: QrVersions.auto,
+            size: size,
+            backgroundColor: Colors.white,
+          );
+        },
+      );
+    } else {
+      qrWidget = QrImageView(
+        data: qrData,
+        version: QrVersions.auto,
+        size: size,
+        backgroundColor: Colors.white,
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: qrWidget,
+      ),
+    );
   }
 
   Widget _buildDefaultGrid(BuildContext context, List<Game> games, int crossAxisCount) {
@@ -738,6 +1074,7 @@ class _GameGridPageState extends State<GameGridPage> {
             itemBuilder: (context, index) {
               final game = games[index];
               return GameThumb(
+                key: _getThumbKey(index),
                 game: game,
                 gridPage: widget,
                 cleanBaseUrl: widget.baseUrl,
@@ -785,6 +1122,145 @@ class _GameGridPageState extends State<GameGridPage> {
           },
         ),
       ),
+    );
+  }
+}
+
+class VideoTileWidget extends StatefulWidget {
+  final int index;
+  final Game game;
+  final bool isExpanded;
+  final double cellLeft;
+  final double cellTop;
+  final double cellWidth;
+  final double cellHeight;
+  final double screenWidth;
+  final double screenHeight;
+  final VoidCallback onTap;
+  final Widget child;
+  final Widget lowerThird;
+  final Widget boothRibbon;
+
+  const VideoTileWidget({
+    super.key,
+    required this.index,
+    required this.game,
+    required this.isExpanded,
+    required this.cellLeft,
+    required this.cellTop,
+    required this.cellWidth,
+    required this.cellHeight,
+    required this.screenWidth,
+    required this.screenHeight,
+    required this.onTap,
+    required this.child,
+    required this.lowerThird,
+    required this.boothRibbon,
+  });
+
+  @override
+  State<VideoTileWidget> createState() => _VideoTileWidgetState();
+}
+
+class _VideoTileWidgetState extends State<VideoTileWidget> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    debugPrint('[VideoTile ${widget.index}] initState (isExpanded=${widget.isExpanded})');
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _animation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    );
+
+    if (widget.isExpanded) {
+      debugPrint('[VideoTile ${widget.index}] initState isExpanded=true -> starting forward()');
+      _controller.forward(from: 0.0);
+    }
+
+    _controller.addListener(() {
+      if (_controller.isAnimating) {
+        debugPrint('[VideoTile ${widget.index}] Animating progress: ${_controller.value.toStringAsFixed(2)}');
+      }
+    });
+
+    _controller.addStatusListener((status) {
+      debugPrint('[VideoTile ${widget.index}] Status changed: $status');
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(VideoTileWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isExpanded != oldWidget.isExpanded) {
+      debugPrint('[VideoTile ${widget.index}] isExpanded: ${oldWidget.isExpanded} -> ${widget.isExpanded}');
+      if (widget.isExpanded) {
+        debugPrint('[VideoTile ${widget.index}] Starting expand animation forward()');
+        _controller.forward(from: 0.0);
+      } else {
+        debugPrint('[VideoTile ${widget.index}] Starting collapse animation reverse()');
+        _controller.reverse(from: 1.0);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    debugPrint('[VideoTile ${widget.index}] dispose');
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, child) {
+        final progress = _animation.value;
+        final left = ui.lerpDouble(widget.cellLeft, 0, progress)!;
+        final top = ui.lerpDouble(widget.cellTop, 0, progress)!;
+        final width = ui.lerpDouble(widget.cellWidth, widget.screenWidth, progress)!;
+        final height = ui.lerpDouble(widget.cellHeight, widget.screenHeight, progress)!;
+
+        return Positioned(
+          left: left,
+          top: top,
+          width: width,
+          height: height,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onTap,
+            child: ClipRect(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: widget.child),
+                  AnimatedOpacity(
+                    duration: const Duration(milliseconds: 300),
+                    opacity: (_controller.status == AnimationStatus.completed && widget.isExpanded) ? 1.0 : 0.0,
+                    child: IgnorePointer(
+                      child: Stack(
+                        children: [
+                          widget.lowerThird,
+                          widget.boothRibbon,
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -901,6 +1377,38 @@ class _GameThumbState extends State<GameThumb> {
   bool _isHovered = false;
   bool _useVideo = false;
   late String _videoViewId;
+  web.HTMLVideoElement? _videoFg;
+  web.HTMLVideoElement? _videoBg;
+  double? _pendingLeadTime;
+
+  double? get videoDuration => _videoFg?.duration;
+
+  void alignVideoToLoopStart(double leadTimeInSeconds) {
+    _pendingLeadTime = leadTimeInSeconds;
+    _applyLeadTime();
+  }
+
+  void _applyLeadTime() {
+    if (_pendingLeadTime == null || _videoFg == null) return;
+    try {
+      final d = _videoFg!.duration;
+      if (d > 0 && !d.isNaN) {
+        double startTime = d - _pendingLeadTime!;
+        while (startTime < 0) {
+          startTime += d;
+        }
+        _videoFg!.currentTime = startTime;
+        if (_videoBg != null) {
+          _videoBg!.currentTime = startTime;
+        }
+        _pendingLeadTime = null;
+      }
+    } catch (_) {}
+  }
+
+  void resetVideoToStart() {
+    alignVideoToLoopStart(0.5);
+  }
 
   @override
   void initState() {
@@ -956,6 +1464,13 @@ class _GameThumbState extends State<GameThumb> {
 
         videoFg.onPlay.listen((_) => videoBg.play());
         videoFg.onPause.listen((_) => videoBg.pause());
+        videoFg.onLoadedMetadata.listen((_) => _applyLeadTime());
+        videoFg.onCanPlay.listen((_) => _applyLeadTime());
+
+        _videoFg = videoFg;
+        _videoBg = videoBg;
+
+        _applyLeadTime();
 
         container.appendChild(videoBg);
         container.appendChild(videoFg);
@@ -995,33 +1510,33 @@ class _GameThumbState extends State<GameThumb> {
     if (isVideoMode) {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: Hero(
-          tag: widget.game.name,
-          child: Material(
-            color: const Color(0xFF1E1E1E),
-            child: SizedBox.expand(
-              child: Stack(
-                children: [
-                  if (showVideoPreview)
-                    PointerInterceptor(
-                      child: HtmlElementView(viewType: _videoViewId),
-                    )
-                  else
-                    GameImageThumb(
-                      cleanBaseUrl: cleanBaseUrl,
-                      gameUrl: widget.game.url,
-                      fit: BoxFit.contain,
-                    ),
-                  Positioned.fill(
-                    child: PointerInterceptor(
-                      child: Container(
-                        color: Colors.transparent,
-                      ),
+        onTap: () {
+          resetVideoToStart();
+          if (widget.onTap != null) widget.onTap!();
+        },
+        child: Material(
+          color: const Color(0xFF1E1E1E),
+          child: SizedBox.expand(
+            child: Stack(
+              children: [
+                if (showVideoPreview)
+                  PointerInterceptor(
+                    child: HtmlElementView(viewType: _videoViewId),
+                  )
+                else
+                  GameImageThumb(
+                    cleanBaseUrl: cleanBaseUrl,
+                    gameUrl: widget.game.url,
+                    fit: BoxFit.contain,
+                  ),
+                Positioned.fill(
+                  child: PointerInterceptor(
+                    child: Container(
+                      color: Colors.transparent,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1034,6 +1549,7 @@ class _GameThumbState extends State<GameThumb> {
       onExit: (_) => setState(() => _isHovered = false),
       child: GestureDetector(
         onTap: () {
+          resetVideoToStart();
           Navigator.push(
             context,
             PageRouteBuilder(
@@ -1046,12 +1562,7 @@ class _GameThumbState extends State<GameThumb> {
               transitionDuration: const Duration(milliseconds: 500),
               reverseTransitionDuration: const Duration(milliseconds: 500),
               transitionsBuilder:
-                  (context, animation, secondaryAnimation, child) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: child,
-                );
-              },
+                  (context, animation, secondaryAnimation, child) => child,
             ),
           );
         },
@@ -1174,6 +1685,14 @@ class _GameDetailPageState extends State<GameDetailPage> {
   bool _hasDescription = false;
   bool _showDescription = false;
 
+  void _safePop() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route != null && route.isCurrent) {
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1241,14 +1760,27 @@ class _GameDetailPageState extends State<GameDetailPage> {
             videoFg.style.cursor = 'pointer';
             videoFg.setAttribute('playsinline', 'true');
 
+            void applyDetailLeadTime() {
+              try {
+                final d = videoFg.duration;
+                if (d > 0 && !d.isNaN) {
+                  double startTime = d - 0.5;
+                  while (startTime < 0) {
+                    startTime += d;
+                  }
+                  videoFg.currentTime = startTime;
+                  videoBg.currentTime = startTime;
+                }
+              } catch (_) {}
+            }
+
+            videoFg.onLoadedMetadata.listen((_) => applyDetailLeadTime());
+            videoFg.onCanPlay.listen((_) => applyDetailLeadTime());
+
             videoFg.onPlay.listen((_) => videoBg.play());
             videoFg.onPause.listen((_) => videoBg.pause());
-            videoFg.onClick.listen((_) {
-              if (mounted) Navigator.of(context).pop();
-            });
-            videoFg.onEnded.listen((_) {
-              if (mounted) Navigator.of(context).pop();
-            });
+            videoFg.onClick.listen((_) => _safePop());
+            videoFg.onEnded.listen((_) => _safePop());
 
             container.appendChild(videoBg);
             container.appendChild(videoFg);
@@ -1268,32 +1800,36 @@ class _GameDetailPageState extends State<GameDetailPage> {
         },
       );
 
-      // Wait for the Hero animation to complete
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final route = ModalRoute.of(context);
-        if (route != null && route.animation != null) {
-          void listener(AnimationStatus status) {
-            if (status == AnimationStatus.completed) {
+      if (widget.game.isVideo || widget.mode == GameMode.video) {
+        _showHtml = true;
+      } else {
+        // Wait for the Hero animation to complete for web iframes
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final route = ModalRoute.of(context);
+          if (route != null && route.animation != null) {
+            void listener(AnimationStatus status) {
+              if (status == AnimationStatus.completed) {
+                if (mounted) {
+                  setState(() {
+                    _showHtml = true;
+                  });
+                }
+                route.animation!.removeStatusListener(listener);
+              }
+            }
+
+            route.animation!.addStatusListener(listener);
+          } else {
+            Future.delayed(const Duration(milliseconds: 500), () {
               if (mounted) {
                 setState(() {
                   _showHtml = true;
                 });
               }
-              route.animation!.removeStatusListener(listener);
-            }
+            });
           }
-
-          route.animation!.addStatusListener(listener);
-        } else {
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted) {
-              setState(() {
-                _showHtml = true;
-              });
-            }
-          });
-        }
-      });
+        });
+      }
     }
   }
 
@@ -1476,26 +2012,23 @@ class _GameDetailPageState extends State<GameDetailPage> {
                   child: SizedBox.expand(
                     child: Stack(
                       children: [
-                // Always render the thumbnail as a backdrop.
-                // This ensures the recorder has pixels to capture instead of a grey square.
-                Positioned.fill(
-                  child: ImageFiltered(
-                    imageFilter: (widget.game.isVideo || widget.mode == GameMode.video)
-                        ? ui.ImageFilter.blur(sigmaX: 0, sigmaY: 0) // Clear for video
-                        : ui.ImageFilter.blur(sigmaX: 7.0, sigmaY: 7.0), // Blurred for games
-                    child: GameImageThumb(
-                      cleanBaseUrl: cleanBaseUrl,
-                      gameUrl: widget.game.url,
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                ),
-                if (!widget.game.isVideo && widget.mode != GameMode.video)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.white.withValues(alpha: 0.2),
-                    ),
-                  ),
+                        if (!widget.game.isVideo && widget.mode != GameMode.video) ...[
+                          Positioned.fill(
+                            child: ImageFiltered(
+                              imageFilter: ui.ImageFilter.blur(sigmaX: 7.0, sigmaY: 7.0),
+                              child: GameImageThumb(
+                                cleanBaseUrl: cleanBaseUrl,
+                                gameUrl: widget.game.url,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          Positioned.fill(
+                            child: Container(
+                              color: Colors.white.withValues(alpha: 0.2),
+                            ),
+                          ),
+                        ],
                         SizedBox.expand(
                           child: _isExecuting
                             ? const Center(
@@ -1557,11 +2090,7 @@ class _GameDetailPageState extends State<GameDetailPage> {
                             child: PointerInterceptor(
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                onTap: () {
-                                  if (mounted) {
-                                    Navigator.of(context).pop();
-                                  }
-                                },
+                                onTap: _safePop,
                                 child: Container(
                                   color: Colors.transparent,
                                 ),
