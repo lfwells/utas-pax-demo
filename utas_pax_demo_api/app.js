@@ -54,17 +54,6 @@ app.get("/games/index", (req, res) => {
   });
   res.json(jsonData);
 });
-// Serve static files with correct MIME types
-app.use("/games", (req, res, next) => {
-  const gamesPath = getGamesPath();
-  express.static(gamesPath, {
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith('.wasm')) {
-        res.setHeader('Content-Type', 'application/wasm');
-      }
-    }, fallthrough: false
-  })(req, res, next);
-});
 
 // Fallthrough handling for missing individual files within game folders
 app.use("/games", (req, res, next) => {
@@ -236,6 +225,18 @@ if (!fs.existsSync(flutterPath)) {
 }
 
 app.use(express.static(flutterPath));
+
+// Serve static files with correct MIME types
+app.use("/games", (req, res, next) => {
+  const gamesPath = getGamesPath();
+  express.static(gamesPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.wasm')) {
+        res.setHeader('Content-Type', 'application/wasm');
+      }
+    }, fallthrough: false
+  })(req, res, next);
+});
 
 // Catch-all to handle Flutter routing
 app.get(/(.*)/, (req, res) => {
