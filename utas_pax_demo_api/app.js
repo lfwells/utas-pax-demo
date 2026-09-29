@@ -44,7 +44,7 @@ function getGamesPath() {
   return app.get('gamesPath') || path.join(__dirname, 'games');
 }
 
-app.get("/index", (req, res) => {
+app.get("/games/index", (req, res) => {
   const gamesPath = getGamesPath();
   //list all the json files in the gamesPath directory, except package.json and package-lock.json, and return their contents as an array of JSON objects
   const jsonFiles = fs.readdirSync(gamesPath).filter(file => file.endsWith('.json') && file !== 'package.json' && file !== 'package-lock.json');
