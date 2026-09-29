@@ -90,7 +90,7 @@ app.use("/games", (req, res, next) => {
   next();
 });
 
-app.post("/execute", (req, res) => {
+app.post("/games/execute", (req, res) => {
   let command = req.body.command;
   if (!command) {
     return res.status(400).send('Missing command parameter');
