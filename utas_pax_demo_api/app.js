@@ -97,7 +97,21 @@ app.post("/execute", (req, res) => {
   }
 
   //if exe found in the command, replace with .app
-  command = command.replace(/\.exe/g, '.app');
+  //but only if we're on macos
+  if (process.platform === 'darwin') {
+    command = command.replace(/\.exe/g, '.app');
+  }
+
+  //otherwise, if on windows, if the command is .exe then we assume they're trying to open an exe in the games folder, so we prepend the games folder path to the command
+  if (process.platform === 'win32') {
+    const gamesFolder = getGamesPath();
+    if (command.endsWith('.exe')) {
+      //except we need the command to also have start /d added to the front of it so it runs with a directory context
+      command = `start /d "${gamesFolder}" ${path.join(gamesFolder, command)}`;
+    }
+  }
+
+  console.log('Executing command:', command);
 
   const exec = require('child_process').exec;
   exec(command, (error, stdout, stderr) => {
