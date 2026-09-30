@@ -261,12 +261,13 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: SizedBox(
-                      width: 320,
+                      width: 340,
                       height: 80,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: option.isTasgmStyle ? Colors.orange.shade800 : Colors.deepPurple,
+                          backgroundColor: option.isVideoMode ? Colors.teal.shade800 : Colors.deepPurple,
                           foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -293,10 +294,16 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
                                           onPressed: () => Navigator.of(context).pop(VideoExecutionMode.kiosk),
                                         ),
                                         const SizedBox(height: 8),
-                                        TextButton(
+                                        const SizedBox(height: 4),
+                                        ElevatedButton(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.deepPurple,
+                                            foregroundColor: Colors.white,
+                                          ),
                                           child: const Text('Live Playback Only'),
                                           onPressed: () => Navigator.of(context).pop(VideoExecutionMode.live),
                                         ),
+                                        /*
                                         const SizedBox(height: 4),
                                         ElevatedButton(
                                           style: ElevatedButton.styleFrom(
@@ -305,7 +312,7 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
                                           ),
                                           child: const Text('Record to MP4'),
                                           onPressed: () => Navigator.of(context).pop(VideoExecutionMode.record),
-                                        ),
+                                        ),*/
                                       ],
                                     ),
                                   ],
@@ -341,10 +348,22 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
                             );
                           }
                         },
-                        child: Text(
-                          option.name,
-                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                          textAlign: TextAlign.center,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              option.isVideoMode ? Icons.ondemand_video : Icons.sports_esports,
+                              size: 28,
+                            ),
+                            const SizedBox(width: 12),
+                            Flexible(
+                              child: Text(
+                                option.name,
+                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -455,6 +474,7 @@ class Game extends GridItem {
   final bool showLowerThird;
   final bool tasgm;
   final bool stillThumbnail;
+  final double aspectRatio;
 
   @override
   String get displayUrl => url;
@@ -472,6 +492,7 @@ class Game extends GridItem {
     this.showLowerThird = true,
     this.tasgm = false,
     this.stillThumbnail = false,
+    this.aspectRatio = 16 / 9,
   });
 
   factory Game.fromJson(Map<String, dynamic> json) {
@@ -483,6 +504,40 @@ class Game extends GridItem {
         final lower = val.toLowerCase().trim();
         if (lower == 'true' || lower == '1') return true;
         if (lower == 'false' || lower == '0') return false;
+      }
+      return defaultValue;
+    }
+
+    double parseAspectRatio(dynamic val, {double defaultValue = 16 / 9}) {
+      if (val == null) return defaultValue;
+      if (val is num) return val.toDouble();
+      if (val is String) {
+        final str = val.trim();
+        if (str.contains(':')) {
+          final parts = str.split(':');
+          if (parts.length == 2) {
+            final w = double.tryParse(parts[0].trim());
+            final h = double.tryParse(parts[1].trim());
+            if (w != null && h != null && h != 0) return w / h;
+          }
+        } else if (str.contains('/')) {
+          final parts = str.split('/');
+          if (parts.length == 2) {
+            final w = double.tryParse(parts[0].trim());
+            final h = double.tryParse(parts[1].trim());
+            if (w != null && h != null && h != 0) return w / h;
+          }
+        } else if (str.contains('x')) {
+          final parts = str.split('x');
+          if (parts.length == 2) {
+            final w = double.tryParse(parts[0].trim());
+            final h = double.tryParse(parts[1].trim());
+            if (w != null && h != null && h != 0) return w / h;
+          }
+        } else {
+          final parsed = double.tryParse(str);
+          if (parsed != null && parsed > 0) return parsed;
+        }
       }
       return defaultValue;
     }
@@ -506,6 +561,7 @@ class Game extends GridItem {
       showLowerThird: parseBool(json['showLowerThird'] ?? json['show_lower_third'], true),
       tasgm: parseBool(json['tasgm'], false),
       stillThumbnail: parseBool(json['still_thumbnail'] ?? json['stillThumbnail'], false),
+      aspectRatio: parseAspectRatio(json['aspectRatio'] ?? json['aspect_ratio']),
     );
   }
 
