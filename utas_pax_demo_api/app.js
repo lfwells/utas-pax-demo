@@ -78,32 +78,37 @@ app.use("/games", (req, res, next) => {
   }
   next();
 });
-
 app.post("/games/execute", (req, res) => {
   let command = req.body.command;
   if (!command) {
     return res.status(400).send('Missing command parameter');
   }
 
-  //if exe found in the command, replace with .app
-  //but only if we're on macos
+  const gamesFolder = getGamesPath();
+
+  // If on macOS, swap .exe for .app
   if (process.platform === 'darwin') {
     command = command.replace(/\.exe/g, '.app');
   }
 
-  //otherwise, if on windows, if the command is .exe then we assume they're trying to open an exe in the games folder, so we prepend the games folder path to the command
+  // Determine working directory options
+  const execOptions = {
+    cwd: gamesFolder // Sets the execution folder natively in Node
+  };
+
+  let fullCommand = command;
+
   if (process.platform === 'win32') {
-    const gamesFolder = getGamesPath();
+    // If it's a relative executable in the games folder, wrap in quotes for space safety
     if (command.endsWith('.exe')) {
-      //except we need the command to also have start /d added to the front of it so it runs with a directory context
-      command = `start /d "${gamesFolder}" ${path.join(gamesFolder, command)}`;
+      fullCommand = `"${path.join(gamesFolder, command)}"`;
     }
   }
 
-  console.log('Executing command:', command);
+  console.log('Executing command:', fullCommand, 'in CWD:', gamesFolder);
 
   const exec = require('child_process').exec;
-  exec(command, (error, stdout, stderr) => {
+  exec(fullCommand, execOptions, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error executing command: ${error}`);
       return res.status(500).send(`Error executing command: ${error.message}`);
