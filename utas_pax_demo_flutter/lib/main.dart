@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:js_interop';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:ui_web' as ui_web;
@@ -124,11 +125,51 @@ class ModeSelectorPage extends StatefulWidget {
 
 class _ModeSelectorPageState extends State<ModeSelectorPage> {
   late Future<List<GameOption>> _optionsFuture;
+  bool _isFullscreen = false;
+  JSFunction? _fullscreenListener;
 
   @override
   void initState() {
     super.initState();
     _optionsFuture = _fetchOptions();
+    if (kIsWeb) {
+      _isFullscreen = web.document.fullscreenElement != null;
+      _fullscreenListener = ((web.Event _) {
+        if (mounted) {
+          setState(() {
+            _isFullscreen = web.document.fullscreenElement != null;
+          });
+        }
+      }).toJS;
+      web.document.addEventListener('fullscreenchange', _fullscreenListener);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (kIsWeb && _fullscreenListener != null) {
+      web.document.removeEventListener('fullscreenchange', _fullscreenListener);
+    }
+    super.dispose();
+  }
+
+  void _toggleFullscreen() {
+    if (kIsWeb) {
+      if (web.document.fullscreenElement != null) {
+        web.document.exitFullscreen();
+      } else {
+        web.document.documentElement?.requestFullscreen();
+      }
+    } else {
+      setState(() {
+        _isFullscreen = !_isFullscreen;
+        if (_isFullscreen) {
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+        } else {
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+        }
+      });
+    }
   }
 
   Future<List<GameOption>> _fetchOptions() async {
@@ -190,6 +231,13 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
         title: const Text('Select Mode'),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: Icon(_isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
+            tooltip: _isFullscreen ? 'Exit Fullscreen' : 'Fullscreen',
+            onPressed: _toggleFullscreen,
+          ),
+        ],
       ),
       body: FutureBuilder<List<GameOption>>(
         future: _optionsFuture,
@@ -427,6 +475,18 @@ class Game extends GridItem {
   });
 
   factory Game.fromJson(Map<String, dynamic> json) {
+    bool parseBool(dynamic val, bool defaultValue) {
+      if (val == null) return defaultValue;
+      if (val is bool) return val;
+      if (val is num) return val != 0;
+      if (val is String) {
+        final lower = val.toLowerCase().trim();
+        if (lower == 'true' || lower == '1') return true;
+        if (lower == 'false' || lower == '0') return false;
+      }
+      return defaultValue;
+    }
+
     final rawDescription = json['description'] as String?;
     final parsedDescription = rawDescription
         ?.replaceAll('[', '<span style="background-color:#3a3a3c; color:#ffffff; border:1px solid #666666; border-radius:4px; padding:2px 6px; display:inline-block">')
@@ -439,13 +499,13 @@ class Game extends GridItem {
       author: json['author'] as String? ?? 'Unknown',
       execute: json['execute'] as String?,
       steam: json['steam'] as String?,
-      isVideo: json['video'] as bool? ?? false,
+      isVideo: parseBool(json['video'], false),
       description: parsedDescription,
       qr: json['qr'] as String?,
-      onBooth: (json['onBooth'] as bool?) ?? (json['on_booth'] as bool?) ?? false,
-      showLowerThird: (json['showLowerThird'] as bool?) ?? (json['show_lower_third'] as bool?) ?? true,
-      tasgm: (json['tasgm'] as bool?) ?? false,
-      stillThumbnail: (json['still_thumbnail'] as bool?) ?? (json['stillThumbnail'] as bool?) ?? false,
+      onBooth: parseBool(json['onBooth'] ?? json['on_booth'], false),
+      showLowerThird: parseBool(json['showLowerThird'] ?? json['show_lower_third'], true),
+      tasgm: parseBool(json['tasgm'], false),
+      stillThumbnail: parseBool(json['still_thumbnail'] ?? json['stillThumbnail'], false),
     );
   }
 
@@ -541,6 +601,7 @@ class GameGridPage extends StatefulWidget {
 class _GameGridPageState extends State<GameGridPage> {
   bool _isSequenceRunning = false;
   bool _isRecording = false;
+  int _gridCycle = 0;
   final List<Future<void>> _pendingFrameUploads = [];
 
   Completer<void>? _gridWaitCompleter;
@@ -584,13 +645,14 @@ class _GameGridPageState extends State<GameGridPage> {
       }
       setState(() {
         _expandedVideoIndex = null;
-        _currentActiveGame = null;
       });
       _topTileTimer?.cancel();
-      _topTileTimer = Timer(const Duration(milliseconds: 550), () {
+      _topTileTimer = Timer(const Duration(milliseconds: 1000), () {
         if (mounted) {
           setState(() {
             _topTileIndex = null;
+            _currentActiveGame = null;
+            _gridCycle++;
           });
         }
       });
@@ -1090,7 +1152,7 @@ class _GameGridPageState extends State<GameGridPage> {
         ? widget.baseUrl.substring(0, widget.baseUrl.length - 1)
         : widget.baseUrl;
 
-    final activeGame = (_expandedVideoIndex == index && _currentActiveGame != null)
+    final activeGame = (_currentActiveGame != null && (_expandedVideoIndex == index || _topTileIndex == index))
         ? _currentActiveGame!
         : (item is Game ? item : (item as GameCompilation).games.first);
 
@@ -1237,6 +1299,8 @@ class _GameGridPageState extends State<GameGridPage> {
         item: item,
         gridPage: widget,
         cleanBaseUrl: widget.baseUrl,
+        gridCycle: _gridCycle,
+        isTileActive: (_expandedVideoIndex == index || _topTileIndex == index),
       ),
     );
   }
@@ -1330,6 +1394,8 @@ class _GameGridPageState extends State<GameGridPage> {
                 item: item,
                 gridPage: widget,
                 cleanBaseUrl: widget.baseUrl,
+                gridCycle: _gridCycle,
+                isTileActive: (_expandedVideoIndex == index || _topTileIndex == index),
                 onTap: (widget.option.isVideoMode && !widget.isKioskMode)
                     ? () => _skipGridWait(index)
                     : null,
@@ -1465,7 +1531,7 @@ class _VideoTileWidgetState extends State<VideoTileWidget> with SingleTickerProv
         final width = ui.lerpDouble(widget.cellWidth, widget.screenWidth, progress)!;
         final height = ui.lerpDouble(widget.cellHeight, widget.screenHeight, progress)!;
 
-        final isFullyExpanded = widget.isExpanded || progress > 0.8;
+        final overlayOpacity = (progress - 0.3).clamp(0.0, 0.7) / 0.7;
 
         return Positioned(
           left: left,
@@ -1479,19 +1545,22 @@ class _VideoTileWidgetState extends State<VideoTileWidget> with SingleTickerProv
               child: Stack(
                 children: [
                   Positioned.fill(child: widget.child),
-                  AnimatedOpacity(
-                    duration: const Duration(milliseconds: 300),
-                    opacity: isFullyExpanded ? 1.0 : 0.0,
-                    child: IgnorePointer(
-                      child: Stack(
-                        children: [
-                          widget.lowerThird,
-                          widget.boothRibbon,
-                          widget.progressBar,
-                        ],
+                  if (overlayOpacity > 0)
+                    Opacity(
+                      opacity: overlayOpacity,
+                      child: PointerInterceptor(
+                        intercepting: false,
+                        child: IgnorePointer(
+                          child: Stack(
+                            children: [
+                              widget.lowerThird,
+                              widget.boothRibbon,
+                              widget.progressBar,
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -1597,12 +1666,16 @@ class GameThumb extends StatefulWidget {
     required this.gridPage,
     required this.cleanBaseUrl,
     this.onTap,
+    this.gridCycle = 0,
+    this.isTileActive = false,
   });
 
   final GridItem item;
   final GameGridPage gridPage;
   final String cleanBaseUrl;
   final VoidCallback? onTap;
+  final int gridCycle;
+  final bool isTileActive;
 
   @override
   State<GameThumb> createState() => _GameThumbState();
@@ -1611,6 +1684,8 @@ class GameThumb extends StatefulWidget {
 class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   bool _isHovered = false;
   bool _useVideo = false;
+  bool _revealVideo = false;
+  Timer? _randomRevealTimer;
   late String _videoViewId;
   web.HTMLVideoElement? _videoFg;
   web.HTMLVideoElement? _videoBg;
@@ -1623,6 +1698,24 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   Stream<void> get onVideoEnded => _videoEndedController.stream;
 
   double? get videoDuration => _videoFg?.duration;
+
+  void _scheduleRandomReveal() {
+    _randomRevealTimer?.cancel();
+    if (!widget.gridPage.option.isVideoMode) {
+      _revealVideo = true;
+      return;
+    }
+
+    _revealVideo = false;
+    final randomMs = 300 + math.Random().nextInt(2900);
+    _randomRevealTimer = Timer(Duration(milliseconds: randomMs), () {
+      if (mounted) {
+        setState(() {
+          _revealVideo = true;
+        });
+      }
+    });
+  }
 
   void resetThumbnailIfStill() {
     final primaryGame = widget.item is Game ? (widget.item as Game) : (widget.item as GameCompilation).games.first;
@@ -1804,6 +1897,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _videoViewId = 'video-thumb-${widget.item.name.replaceAll(' ', '-')}';
+    _scheduleRandomReveal();
 
     _progressTicker = createTicker((_) {
       if (_videoFg != null) {
@@ -1825,7 +1919,16 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   }
 
   @override
+  void didUpdateWidget(GameThumb oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.gridCycle != oldWidget.gridCycle) {
+      _scheduleRandomReveal();
+    }
+  }
+
+  @override
   void dispose() {
+    _randomRevealTimer?.cancel();
     _progressTicker?.dispose();
     playbackProgressNotifier.dispose();
     _videoEndedController.close();
@@ -1859,7 +1962,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
     final isKioskMode = widget.gridPage.isKioskMode;
 
     final primaryGame = widget.item is Game ? (widget.item as Game) : (widget.item as GameCompilation).games.first;
-    final showVideoPreview = isVideoMode && _useVideo;
+    final showVideoPreview = isVideoMode && _useVideo && (_revealVideo || widget.isTileActive);
 
     if (isVideoMode && !isKioskMode) {
       return GestureDetector(
@@ -1873,15 +1976,18 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
           child: SizedBox.expand(
             child: Stack(
               children: [
-                if (showVideoPreview)
-                  PointerInterceptor(
-                    child: HtmlElementView(viewType: _videoViewId),
-                  )
-                else
-                  GameImageThumb(
-                    cleanBaseUrl: cleanBaseUrl,
-                    gameUrl: widget.item.displayUrl,
-                    fit: BoxFit.contain,
+                GameImageThumb(
+                  cleanBaseUrl: cleanBaseUrl,
+                  gameUrl: widget.item.displayUrl,
+                  fit: BoxFit.contain,
+                ),
+                if (_useVideo)
+                  AnimatedOpacity(
+                    duration: const Duration(milliseconds: 300),
+                    opacity: showVideoPreview ? 1.0 : 0.0,
+                    child: PointerInterceptor(
+                      child: HtmlElementView(viewType: _videoViewId),
+                    ),
                   ),
                 Positioned.fill(
                   child: PointerInterceptor(
@@ -1944,14 +2050,22 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
                       );
                     },
                     child: SizedBox.expand(
-                      child: showVideoPreview
-                          ? PointerInterceptor(
-                        child: HtmlElementView(viewType: _videoViewId),
-                      )
-                          : GameImageThumb(
-                        cleanBaseUrl: cleanBaseUrl,
-                        gameUrl: widget.item.displayUrl,
-                        fit: BoxFit.contain,
+                      child: Stack(
+                        children: [
+                          GameImageThumb(
+                            cleanBaseUrl: cleanBaseUrl,
+                            gameUrl: widget.item.displayUrl,
+                            fit: BoxFit.contain,
+                          ),
+                          if (_useVideo)
+                            AnimatedOpacity(
+                              duration: const Duration(milliseconds: 300),
+                              opacity: showVideoPreview ? 1.0 : 0.0,
+                              child: PointerInterceptor(
+                                child: HtmlElementView(viewType: _videoViewId),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
