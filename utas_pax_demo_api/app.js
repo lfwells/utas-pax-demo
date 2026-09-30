@@ -78,37 +78,41 @@ app.use("/games", (req, res, next) => {
   }
   next();
 });
+
 app.post("/games/execute", (req, res) => {
   let command = req.body.command;
   if (!command) {
     return res.status(400).send('Missing command parameter');
   }
 
-  const gamesFolder = getGamesPath();
+  // Normalize slashes (convert forward slashes to system-native backslashes on Windows)
+  const normalizedCommand = path.normalize(command.trim());
+  
+  // Extract sub-directory (e.g. "/art_for_snakes/") and target file ("ArtForSnakes.exe")
+  const parsed = path.parse(normalizedCommand);
+  
+  // Dynamic CWD: base games folder + any subfolder path provided in the command
+  const workingDir = path.join(getGamesPath(), parsed.dir);
+  let execFileName = parsed.base;
 
-  // If on macOS, swap .exe for .app
+  // Swap .exe to .app if running on macOS
   if (process.platform === 'darwin') {
-    command = command.replace(/\.exe/g, '.app');
+    execFileName = execFileName.replace(/\.exe$/i, '.app');
   }
 
-  // Determine working directory options
-  const execOptions = {
-    cwd: gamesFolder // Sets the execution folder natively in Node
-  };
+  // Wrap executable in quotes for safety against spaces
+  let fullCommand = `"${execFileName}"`;
 
-  let fullCommand = command;
-
+  // On Windows, if executing an .exe directly via CMD, prepend starting quotes or path
   if (process.platform === 'win32') {
-    // If it's a relative executable in the games folder, wrap in quotes for space safety
-    if (command.endsWith('.exe')) {
-      fullCommand = `"${path.join(gamesFolder, command)}"`;
-    }
+    fullCommand = `"${path.join(workingDir, execFileName)}"`;
   }
 
-  console.log('Executing command:', fullCommand, 'in CWD:', gamesFolder);
+  console.log('Executing:', fullCommand);
+  console.log('Working Directory (CWD):', workingDir);
 
   const exec = require('child_process').exec;
-  exec(fullCommand, execOptions, (error, stdout, stderr) => {
+  exec(fullCommand, { cwd: workingDir }, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error executing command: ${error}`);
       return res.status(500).send(`Error executing command: ${error.message}`);
