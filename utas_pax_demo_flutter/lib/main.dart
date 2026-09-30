@@ -2531,10 +2531,20 @@ class _GameDetailPageState extends State<GameDetailPage> {
                             ),
                           )
                               : (_showHtml
+                              ? (widget.game.isVideo || widget.option.isVideoMode
                               ? PointerInterceptor(
                             intercepting: !_showDescription,
                             child: HtmlElementView(viewType: _viewId),
                           )
+                              : Center(
+                            child: AspectRatio(
+                              aspectRatio: widget.game.aspectRatio,
+                              child: PointerInterceptor(
+                                intercepting: !_showDescription,
+                                child: HtmlElementView(viewType: _viewId),
+                              ),
+                            ),
+                          ))
                               : Center(
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
