@@ -85,27 +85,23 @@ app.post("/games/execute", (req, res) => {
     return res.status(400).send('Missing command parameter');
   }
 
-  // Normalize slashes (convert forward slashes to system-native backslashes on Windows)
+  // Normalize slashes
   const normalizedCommand = path.normalize(command.trim());
-  
-  // Extract sub-directory (e.g. "/art_for_snakes/") and target file ("ArtForSnakes.exe")
   const parsed = path.parse(normalizedCommand);
   
-  // Dynamic CWD: base games folder + any subfolder path provided in the command
   const workingDir = path.join(getGamesPath(), parsed.dir);
   let execFileName = parsed.base;
 
-  // Swap .exe to .app if running on macOS
   if (process.platform === 'darwin') {
     execFileName = execFileName.replace(/\.exe$/i, '.app');
   }
 
-  // Wrap executable in quotes for safety against spaces
   let fullCommand = `"${execFileName}"`;
 
-  // On Windows, if executing an .exe directly via CMD, prepend starting quotes or path
   if (process.platform === 'win32') {
-    fullCommand = `"${path.join(workingDir, execFileName)}"`;
+    const targetPath = path.join(workingDir, execFileName);
+    // Use PowerShell Start-Process to launch the game and grab window focus
+    fullCommand = `powershell -Command "Start-Process -FilePath '${targetPath}' -WorkingDirectory '${workingDir}'"`;
   }
 
   console.log('Executing:', fullCommand);
