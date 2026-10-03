@@ -50,8 +50,14 @@ app.get("/games/index", (req, res) => {
   const jsonFiles = fs.readdirSync(gamesPath).filter(file => file.endsWith('.json') && file !== 'package.json' && file !== 'package-lock.json');
   const jsonData = jsonFiles.map(file => {
     const filePath = path.join(gamesPath, file);
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  });
+    try
+    {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (error) {
+      console.error(`Error parsing JSON file: ${filePath}`, error);
+      return null;
+    }
+  }).filter(Boolean);
   res.json(jsonData);
 });
 

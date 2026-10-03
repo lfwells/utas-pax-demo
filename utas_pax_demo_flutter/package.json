@@ -1,0 +1,13 @@
+{
+  "name": "utas-pax-demo-recorder",
+  "version": "1.0.0",
+  "description": "Native 60fps browser recorder for UTAS PAX Demo Flutter Web",
+  "main": "record.js",
+  "scripts": {
+    "record": "node record.js"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "playwright": "^1.40.0"
+  }
+}

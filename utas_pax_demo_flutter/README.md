@@ -1,17 +1,52 @@
-# utax_pax_demo_flutter
+# UTAS PAX Demo Flutter
 
-A new Flutter project.
+A Flutter Web application for displaying interactive game options, video grid sequences, and kiosk modes for UTAS and Tasmanian Game Makers.
 
-## Getting Started
+---
 
-This project is a starting point for a Flutter application.
+## 🔗 URL Deep-Linking Parameters
 
-A few resources to get you started if this is your first Flutter project:
+You can open the web app with query parameters to automatically bypass selection screens and launch straight into a specific mode or JSON grid sequence.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+### Supported Query Parameters:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+* `option`: Specify the JSON filename (e.g. `pax_video.json`, `video.json`, `tasgm.json`) or option name (e.g. `option=PAX%20Video`) or option index (`0`, `1`).
+* `mode`: Execution mode for video sequences (`live`, `kiosk`, or `record`). Default is `live`.
+* `baseUrl`: Override the backend server base URL (e.g. `baseUrl=http://localhost:5001/`).
+
+### Examples:
+* Automatically start `video.json` in Live mode:
+  `http://localhost:5001/?option=video.json&mode=live`
+* Automatically start `pax_video.json` in Kiosk mode:
+  `http://localhost:5001/?option=pax_video.json&mode=kiosk`
+
+---
+
+## 🎬 60fps Screen Recorder
+
+Using Chromium's native video engine and `ffmpeg-static`, `record.js` records the Flutter Canvas + WebGL + HTML Video DOM elements at full 1080p 60fps and automatically converts the video to a high-quality MP4.
+
+### Command Usage:
+```bash
+node record.js [JsonFileName] [DurationInSeconds] [BaseUrlOrPort]
+```
+
+### Examples:
+
+* **Record `video.json` for 30 seconds (default base URL http://localhost:5001):**
+  ```bash
+  node record.js video.json 30
+  ```
+
+* **Record `video.json` for 30 seconds pointing to port 5001:**
+  ```bash
+  node record.js video.json 30 60 http://localhost:5001
+  ```
+  *(Note: Any extra numbers or URLs in the command line are automatically parsed so passing an optional `60` or full URL works seamlessly).*
+
+* **Record `pax_video.json` for 60 seconds:**
+  ```bash
+  node record.js pax_video.json 60
+  ```
+
+Recordings are automatically saved as full 1080p `.webm` and `.mp4` video files inside `./recordings/`.

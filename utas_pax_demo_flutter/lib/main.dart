@@ -53,6 +53,7 @@ class MyApp extends StatelessWidget {
 
 class GameOption {
   final String name;
+  final String? fileName;
   final int cols;
   final bool isVideoMode;
   final bool isTasgmStyle;
@@ -60,13 +61,14 @@ class GameOption {
 
   GameOption({
     required this.name,
+    this.fileName,
     required this.cols,
     required this.isVideoMode,
     required this.isTasgmStyle,
     required this.items,
   });
 
-  factory GameOption.fromJson(Map<String, dynamic> json) {
+  factory GameOption.fromJson(Map<String, dynamic> json, {String? fileName}) {
     final rawGames = json['games'] as List? ?? [];
     final parsedItems = rawGames.map<GridItem>((itemJson) {
       final map = itemJson as Map<String, dynamic>;
@@ -80,6 +82,7 @@ class GameOption {
 
     return GameOption(
       name: json['name'] as String? ?? 'Unnamed Option',
+      fileName: fileName,
       cols: (json['cols'] as num?)?.toInt() ?? 4,
       isVideoMode: modeStr == 'video',
       isTasgmStyle: (json['tasgm'] as bool?) ?? false,
@@ -115,6 +118,19 @@ class GameOption {
 
 enum VideoExecutionMode { live, record, kiosk }
 
+Map<String, String> getQueryParams() {
+  final queryParams = Uri.base.queryParameters;
+  if (queryParams.isNotEmpty) {
+    return queryParams;
+  }
+  final fragment = Uri.base.fragment;
+  if (fragment.contains('?')) {
+    final queryStr = fragment.substring(fragment.indexOf('?'));
+    return Uri.parse('http://localhost$queryStr').queryParameters;
+  }
+  return {};
+}
+
 class ModeSelectorPage extends StatefulWidget {
   final String baseUrl;
   const ModeSelectorPage({super.key, required this.baseUrl});
@@ -127,11 +143,15 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
   late Future<List<GameOption>> _optionsFuture;
   bool _isFullscreen = false;
   JSFunction? _fullscreenListener;
+  bool _autoNavigated = false;
 
   @override
   void initState() {
     super.initState();
-    _optionsFuture = _fetchOptions();
+    _optionsFuture = _fetchOptions().then((options) {
+      _checkAutoNavigate(options);
+      return options;
+    });
     if (kIsWeb) {
       _isFullscreen = web.document.fullscreenElement != null;
       _fullscreenListener = ((web.Event _) {
@@ -142,6 +162,82 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
         }
       }).toJS;
       web.document.addEventListener('fullscreenchange', _fullscreenListener);
+    }
+  }
+
+  void _checkAutoNavigate(List<GameOption> options) {
+    if (_autoNavigated || options.isEmpty) return;
+
+    final params = getQueryParams();
+    final optionParam = params['option'] ?? params['optionName'] ?? params['optionIndex'];
+    if (optionParam == null || optionParam.isEmpty) return;
+
+    GameOption? selectedOption;
+
+    final rawTarget = optionParam.toLowerCase().trim();
+    final cleanTarget = rawTarget.replaceAll('.json', '');
+
+    // 1. Check filename match (e.g. pax_video.json or pax_video)
+    for (final opt in options) {
+      if (opt.fileName != null) {
+        final rawFile = opt.fileName!.toLowerCase().trim();
+        final cleanFile = rawFile.replaceAll('.json', '');
+        if (rawFile == rawTarget || cleanFile == cleanTarget) {
+          selectedOption = opt;
+          break;
+        }
+      }
+    }
+
+    // 2. Check name match (e.g. PAX Video Grid)
+    if (selectedOption == null) {
+      for (final opt in options) {
+        final optNameLower = opt.name.toLowerCase();
+        final cleanOptName = optNameLower.replaceAll('.json', '');
+        if (optNameLower == rawTarget ||
+            cleanOptName == cleanTarget ||
+            optNameLower.contains(cleanTarget) ||
+            cleanTarget.contains(cleanOptName)) {
+          selectedOption = opt;
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback to index match (e.g. 0, 1)
+    if (selectedOption == null) {
+      final parsedIndex = int.tryParse(optionParam);
+      if (parsedIndex != null && parsedIndex >= 0 && parsedIndex < options.length) {
+        selectedOption = options[parsedIndex];
+      }
+    }
+
+    if (selectedOption != null) {
+      _autoNavigated = true;
+      final modeParam = (params['mode'] ?? params['execMode'])?.toLowerCase() ?? 'live';
+      VideoExecutionMode execMode = VideoExecutionMode.live;
+      if (modeParam == 'kiosk') {
+        execMode = VideoExecutionMode.kiosk;
+      } else if (modeParam == 'record') {
+        execMode = VideoExecutionMode.record;
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          PageRouteBuilder(
+            pageBuilder: (context, animation, secondaryAnimation) => GameGridPage(
+              baseUrl: widget.baseUrl,
+              option: selectedOption!,
+              startWithRecording: execMode == VideoExecutionMode.record,
+              isKioskMode: execMode == VideoExecutionMode.kiosk,
+            ),
+            transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+                FadeTransition(opacity: animation, child: child),
+          ),
+        );
+      });
     }
   }
 
@@ -191,7 +287,7 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
               final fileResponse = await http.get(Uri.parse('$cleanBaseUrl/$item'));
               if (fileResponse.statusCode == 200) {
                 final fileData = json.decode(fileResponse.body) as Map<String, dynamic>;
-                options.add(GameOption.fromJson(fileData));
+                options.add(GameOption.fromJson(fileData, fileName: item));
               }
             } catch (e) {
               debugPrint('Error fetching json configuration $item: $e');
@@ -206,7 +302,7 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
               final fileResponse = await http.get(Uri.parse('$cleanBaseUrl/$file'));
               if (fileResponse.statusCode == 200) {
                 final fileData = json.decode(fileResponse.body) as Map<String, dynamic>;
-                options.add(GameOption.fromJson(fileData));
+                options.add(GameOption.fromJson(fileData, fileName: file));
               }
             } catch (e) {
               debugPrint('Error fetching json configuration $file: $e');
@@ -393,11 +489,15 @@ class _BaseUrlPageState extends State<BaseUrlPage> {
     super.initState();
 
     final uri = Uri.base;
+    final params = getQueryParams();
     final protocol = uri.scheme.isEmpty ? 'http' : uri.scheme;
     final host = uri.host.isEmpty ? 'localhost' : uri.host;
     final port = uri.port == 0 ? 5999 : uri.port;
 
-    final currentBaseUrl = kDebugMode ? "http://localhost:5001/" : '$protocol://$host:$port/';
+    final paramBaseUrl = params['baseUrl'];
+    final currentBaseUrl = (paramBaseUrl != null && paramBaseUrl.isNotEmpty)
+        ? (paramBaseUrl.endsWith('/') ? paramBaseUrl : '$paramBaseUrl/')
+        : (kDebugMode ? "http://localhost:5001/" : '$protocol://$host:$port/');
 
     _controller = TextEditingController(text: currentBaseUrl);
 
