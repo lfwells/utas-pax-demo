@@ -47,7 +47,8 @@ function getGamesPath() {
 app.get("/games/index", (req, res) => {
   const gamesPath = getGamesPath();
   //list all the json files in the gamesPath directory, except package.json and package-lock.json, and return their contents as an array of JSON objects
-  const jsonFiles = fs.readdirSync(gamesPath).filter(file => file.endsWith('.json') && file !== 'package.json' && file !== 'package-lock.json');
+  //also exclude any that have "._" at the start of the filename (these are macOS hidden files)
+  const jsonFiles = fs.readdirSync(gamesPath).filter(file => file.endsWith('.json') && file !== 'package.json' && file !== 'package-lock.json' && !file.startsWith('._'));
   const jsonData = jsonFiles.map(file => {
     const filePath = path.join(gamesPath, file);
     try

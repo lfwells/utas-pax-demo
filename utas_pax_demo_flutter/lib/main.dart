@@ -224,20 +224,107 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        Navigator.push(
-          context,
-          PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => GameGridPage(
-              baseUrl: widget.baseUrl,
-              option: selectedOption!,
-              startWithRecording: execMode == VideoExecutionMode.record,
-              isKioskMode: execMode == VideoExecutionMode.kiosk,
-            ),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-                FadeTransition(opacity: animation, child: child),
-          ),
+        _preloadAndNavigate(
+          context: context,
+          baseUrl: widget.baseUrl,
+          option: selectedOption!,
+          startWithRecording: execMode == VideoExecutionMode.record,
+          isKioskMode: execMode == VideoExecutionMode.kiosk,
         );
       });
+    }
+  }
+
+  List<String> _getOptionUrlsToPreload(GameOption option, String baseUrl) {
+    final cleanBaseUrl = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+
+    final Set<String> urls = {};
+
+    // Logo
+    final logoName = option.isTasgmStyle ? 'tasgm_logo.png' : 'utas_dark.png';
+    urls.add('$cleanBaseUrl/_thumbs/$logoName');
+
+    // Extract all games
+    final List<Game> games = [];
+    for (final item in option.items) {
+      if (item is Game) {
+        games.add(item);
+      } else if (item is GameCompilation) {
+        games.addAll(item.games);
+      }
+    }
+
+    for (final game in games) {
+      if (game.url.isNotEmpty) {
+        urls.add('$cleanBaseUrl/_thumbs${game.url}.png');
+        urls.add('$cleanBaseUrl/_thumbs${game.url}.jpg');
+        urls.add('$cleanBaseUrl/_thumbs${game.url}.mp4');
+
+        if (!option.isVideoMode && !game.isVideo) {
+          urls.add('$cleanBaseUrl${game.url}');
+        }
+      }
+
+      if (game.qr != null && game.qr!.isNotEmpty) {
+        final qr = game.qr!;
+        final lower = qr.toLowerCase();
+        final isImage = lower.endsWith('.png') ||
+            lower.endsWith('.jpg') ||
+            lower.endsWith('.jpeg') ||
+            lower.endsWith('.svg') ||
+            lower.endsWith('.webp');
+        if (isImage) {
+          if (qr.startsWith('http://') || qr.startsWith('https://')) {
+            urls.add(qr);
+          } else if (qr.startsWith('/')) {
+            urls.add('$cleanBaseUrl$qr');
+          } else {
+            urls.add('$cleanBaseUrl/$qr');
+          }
+        }
+      }
+    }
+
+    return urls.toList();
+  }
+
+  Future<void> _preloadAndNavigate({
+    required BuildContext context,
+    required String baseUrl,
+    required GameOption option,
+    bool startWithRecording = false,
+    bool isKioskMode = false,
+  }) async {
+    final urls = _getOptionUrlsToPreload(option, baseUrl);
+
+    if (urls.isNotEmpty && context.mounted) {
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => PreloadDialog(
+          option: option,
+          urls: urls,
+          parentContext: context,
+        ),
+      );
+    }
+
+    if (context.mounted) {
+      Navigator.push(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) => GameGridPage(
+            baseUrl: baseUrl,
+            option: option,
+            startWithRecording: startWithRecording,
+            isKioskMode: isKioskMode,
+          ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              FadeTransition(opacity: animation, child: child),
+        ),
+      );
     }
   }
 
@@ -399,16 +486,6 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
                                           child: const Text('Live Playback Only'),
                                           onPressed: () => Navigator.of(context).pop(VideoExecutionMode.live),
                                         ),
-                                        /*
-                                        const SizedBox(height: 4),
-                                        ElevatedButton(
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Colors.deepPurple,
-                                            foregroundColor: Colors.white,
-                                          ),
-                                          child: const Text('Record to MP4'),
-                                          onPressed: () => Navigator.of(context).pop(VideoExecutionMode.record),
-                                        ),*/
                                       ],
                                     ),
                                   ],
@@ -418,30 +495,22 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
                             if (execMode == null) return;
 
                             if (context.mounted) {
-                              Navigator.push(
-                                context,
-                                PageRouteBuilder(
-                                  pageBuilder: (context, animation, secondaryAnimation) => GameGridPage(
-                                    baseUrl: widget.baseUrl,
-                                    option: option,
-                                    startWithRecording: execMode == VideoExecutionMode.record,
-                                    isKioskMode: execMode == VideoExecutionMode.kiosk,
-                                  ),
-                                  transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-                                      FadeTransition(opacity: animation, child: child),
-                                ),
+                              await _preloadAndNavigate(
+                                context: context,
+                                baseUrl: widget.baseUrl,
+                                option: option,
+                                startWithRecording: execMode == VideoExecutionMode.record,
+                                isKioskMode: execMode == VideoExecutionMode.kiosk,
                               );
                             }
                           } else {
-                            Navigator.push(
-                              context,
-                              PageRouteBuilder(
-                                pageBuilder: (context, animation, secondaryAnimation) =>
-                                    GameGridPage(baseUrl: widget.baseUrl, option: option),
-                                transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-                                    FadeTransition(opacity: animation, child: child),
-                              ),
-                            );
+                            if (context.mounted) {
+                              await _preloadAndNavigate(
+                                context: context,
+                                baseUrl: widget.baseUrl,
+                                option: option,
+                              );
+                            }
                           }
                         },
                         child: Row(
@@ -469,6 +538,198 @@ class _ModeSelectorPageState extends State<ModeSelectorPage> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class PreloadDialog extends StatefulWidget {
+  final GameOption option;
+  final List<String> urls;
+  final BuildContext parentContext;
+
+  const PreloadDialog({
+    super.key,
+    required this.option,
+    required this.urls,
+    required this.parentContext,
+  });
+
+  @override
+  State<PreloadDialog> createState() => _PreloadDialogState();
+}
+
+class _PreloadDialogState extends State<PreloadDialog> {
+  int _completed = 0;
+  String _currentFile = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _startPreloading();
+  }
+
+  Future<void> _startPreloading() async {
+    if (widget.urls.isEmpty) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+
+    final total = widget.urls.length;
+    const maxConcurrent = 4;
+    int currentIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        if (currentIndex >= total) break;
+        final index = currentIndex++;
+        final url = widget.urls[index];
+        final fileName = Uri.parse(url).pathSegments.isNotEmpty
+            ? Uri.parse(url).pathSegments.last
+            : url;
+
+        if (mounted) {
+          setState(() {
+            _currentFile = fileName;
+          });
+        }
+
+        try {
+          final isPng = url.endsWith('.png');
+          final isJpg = url.endsWith('.jpg') || url.endsWith('.jpeg');
+          final isImg = isPng || isJpg || url.endsWith('.webp') || url.endsWith('.svg');
+          final isMp4 = url.endsWith('.mp4');
+
+          final response = await http.get(Uri.parse(url));
+
+          if (response.statusCode == 200) {
+            if (isMp4) {
+              GameImageThumb._verifiedVideoUrls.add(url);
+            } else if (isImg) {
+              if (url.contains('/_thumbs/')) {
+                final uriPath = Uri.parse(url).path;
+                final gameKey = uriPath
+                    .replaceAll(RegExp(r'.*/_thumbs'), '')
+                    .replaceAll(RegExp(r'\.(png|jpg|jpeg|webp)$'), '');
+                if (!GameImageThumb._resolvedThumbUrls.containsKey(gameKey) || isPng) {
+                  GameImageThumb._resolvedThumbUrls[gameKey] = url;
+                }
+              }
+              if (widget.parentContext.mounted && !url.endsWith('.svg')) {
+                await precacheImage(NetworkImage(url), widget.parentContext).catchError((_) {});
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (mounted) {
+          setState(() {
+            _completed++;
+          });
+        }
+      }
+    }
+
+    final workers = List.generate(
+      math.min(maxConcurrent, total),
+      (_) => worker(),
+    );
+
+    await Future.wait(workers);
+
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Color get _accentColor {
+    if (widget.option.isTasgmStyle) {
+      return const Color(0xFF3BD9E5);
+    } else if (widget.option.isVideoMode) {
+      return Colors.teal;
+    }
+    return Colors.deepPurpleAccent;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.urls.length;
+    final progress = total > 0 ? (_completed / total).clamp(0.0, 1.0) : 1.0;
+    final percent = (progress * 100).toInt();
+
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Column(
+          children: [
+            Text(
+              'Preloading Assets',
+              style: TextStyle(
+                color: _accentColor,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.option.name,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  backgroundColor: Colors.white12,
+                  valueColor: AlwaysStoppedAnimation<Color>(_accentColor),
+                  minHeight: 12,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '$_completed of $total files',
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  Text(
+                    '$percent%',
+                    style: TextStyle(
+                      color: _accentColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+              if (_currentFile.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _currentFile,
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -575,6 +836,7 @@ class Game extends GridItem {
   final bool tasgm;
   final bool stillThumbnail;
   final double aspectRatio;
+  final double skipSeconds;
 
   @override
   String get displayUrl => url;
@@ -593,6 +855,7 @@ class Game extends GridItem {
     this.tasgm = false,
     this.stillThumbnail = false,
     this.aspectRatio = 16 / 9,
+    this.skipSeconds = 0.0,
   });
 
   factory Game.fromJson(Map<String, dynamic> json) {
@@ -604,6 +867,16 @@ class Game extends GridItem {
         final lower = val.toLowerCase().trim();
         if (lower == 'true' || lower == '1') return true;
         if (lower == 'false' || lower == '0') return false;
+      }
+      return defaultValue;
+    }
+
+    double parseDouble(dynamic val, {double defaultValue = 0.0}) {
+      if (val == null) return defaultValue;
+      if (val is num) return val.toDouble();
+      if (val is String) {
+        final parsed = double.tryParse(val.trim());
+        if (parsed != null) return parsed;
       }
       return defaultValue;
     }
@@ -662,6 +935,7 @@ class Game extends GridItem {
       tasgm: parseBool(json['tasgm'], false),
       stillThumbnail: parseBool(json['still_thumbnail'] ?? json['stillThumbnail'], false),
       aspectRatio: parseAspectRatio(json['aspectRatio'] ?? json['aspect_ratio']),
+      skipSeconds: parseDouble(json['skip_seconds'] ?? json['skipSeconds']),
     );
   }
 
@@ -754,11 +1028,14 @@ class GameGridPage extends StatefulWidget {
   State<GameGridPage> createState() => _GameGridPageState();
 }
 
-class _GameGridPageState extends State<GameGridPage> {
+class _GameGridPageState extends State<GameGridPage> with TickerProviderStateMixin {
   bool _isSequenceRunning = false;
   bool _isRecording = false;
   int _gridCycle = 0;
   final List<Future<void>> _pendingFrameUploads = [];
+
+  double _scrollRowOffset = 0.0;
+  AnimationController? _scrollAnimationController;
 
   Completer<void>? _gridWaitCompleter;
   Completer<void>? _fullscreenWaitCompleter;
@@ -770,6 +1047,32 @@ class _GameGridPageState extends State<GameGridPage> {
 
   final Map<int, GlobalKey<_GameThumbState>> _thumbKeys = {};
   final Map<int, GlobalKey> _tileGlobalKeys = {};
+
+  void _scrollToRow(double targetRow) {
+    _scrollAnimationController?.dispose();
+    final controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    final animation = Tween<double>(
+      begin: _scrollRowOffset,
+      end: targetRow,
+    ).animate(CurvedAnimation(
+      parent: controller,
+      curve: Curves.easeInOut,
+    ));
+
+    animation.addListener(() {
+      if (mounted) {
+        setState(() {
+          _scrollRowOffset = animation.value;
+        });
+      }
+    });
+
+    _scrollAnimationController = controller;
+    controller.forward();
+  }
 
   GlobalKey<_GameThumbState> _getThumbKey(int index) {
     return _thumbKeys.putIfAbsent(index, () => GlobalKey<_GameThumbState>());
@@ -888,6 +1191,7 @@ class _GameGridPageState extends State<GameGridPage> {
 
   @override
   void dispose() {
+    _scrollAnimationController?.dispose();
     HardwareKeyboard.instance.removeHandler(_onKeyEvent);
     super.dispose();
   }
@@ -968,6 +1272,13 @@ class _GameGridPageState extends State<GameGridPage> {
       }
 
       if (!mounted) break;
+
+      final cols = widget.option.cols;
+      final maxScrollRow = math.max(0, (items.length / cols).ceil() - cols);
+      final itemRow = index ~/ cols;
+      if (itemRow < _scrollRowOffset || itemRow >= _scrollRowOffset + cols) {
+        _scrollToRow(itemRow.clamp(0, maxScrollRow).toDouble());
+      }
 
       final item = items[index];
 
@@ -1727,10 +2038,13 @@ class _VideoTileWidgetState extends State<VideoTileWidget> with SingleTickerProv
   }
 }
 
-class GameImageThumb extends StatelessWidget {
+class GameImageThumb extends StatefulWidget {
   final String cleanBaseUrl;
   final String gameUrl;
   final BoxFit fit;
+
+  static final Map<String, String> _resolvedThumbUrls = {};
+  static final Set<String> _verifiedVideoUrls = {};
 
   const GameImageThumb({
     super.key,
@@ -1739,8 +2053,46 @@ class GameImageThumb extends StatelessWidget {
     this.fit = BoxFit.contain,
   });
 
+  @override
+  State<GameImageThumb> createState() => _GameImageThumbState();
+}
+
+class _GameImageThumbState extends State<GameImageThumb> {
+  String? _effectiveUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveUrl();
+  }
+
+  @override
+  void didUpdateWidget(GameImageThumb oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.gameUrl != oldWidget.gameUrl || widget.cleanBaseUrl != oldWidget.cleanBaseUrl) {
+      _resolveUrl();
+    }
+  }
+
+  void _resolveUrl() {
+    final cleanUrl = widget.cleanBaseUrl.endsWith('/')
+        ? widget.cleanBaseUrl.substring(0, widget.cleanBaseUrl.length - 1)
+        : widget.cleanBaseUrl;
+
+    final key = widget.gameUrl;
+    final cleanKey = key.startsWith('/') ? key : '/$key';
+
+    if (GameImageThumb._resolvedThumbUrls.containsKey(key)) {
+      _effectiveUrl = GameImageThumb._resolvedThumbUrls[key];
+    } else if (GameImageThumb._resolvedThumbUrls.containsKey(cleanKey)) {
+      _effectiveUrl = GameImageThumb._resolvedThumbUrls[cleanKey];
+    } else {
+      _effectiveUrl = "$cleanUrl/_thumbs${widget.gameUrl}.png";
+    }
+  }
+
   Widget _buildPair(String imageUrl) {
-    if (fit == BoxFit.cover) {
+    if (widget.fit == BoxFit.cover) {
       return Image.network(
         imageUrl,
         fit: BoxFit.cover,
@@ -1781,35 +2133,35 @@ class GameImageThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cleanUrl = cleanBaseUrl.endsWith('/')
-        ? cleanBaseUrl.substring(0, cleanBaseUrl.length - 1)
-        : cleanBaseUrl;
-    final pngUrl = "$cleanUrl/_thumbs$gameUrl.png";
-    final jpgUrl = "$cleanUrl/_thumbs$gameUrl.jpg";
+    final cleanUrl = widget.cleanBaseUrl.endsWith('/')
+        ? widget.cleanBaseUrl.substring(0, widget.cleanBaseUrl.length - 1)
+        : widget.cleanBaseUrl;
+    final pngUrl = "$cleanUrl/_thumbs${widget.gameUrl}.png";
+    final jpgUrl = "$cleanUrl/_thumbs${widget.gameUrl}.jpg";
+
+    final currentUrl = _effectiveUrl ?? pngUrl;
 
     return Image.network(
-      pngUrl,
-      fit: fit,
+      currentUrl,
+      fit: widget.fit,
       width: double.infinity,
       height: double.infinity,
       frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
         if (frame == null) return const SizedBox.shrink();
-        return _buildPair(pngUrl);
+        return _buildPair(currentUrl);
       },
       errorBuilder: (context, error, stackTrace) {
-        return Image.network(
-          jpgUrl,
-          fit: fit,
-          width: double.infinity,
-          height: double.infinity,
-          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            if (frame == null) return const SizedBox.shrink();
-            return _buildPair(jpgUrl);
-          },
-          errorBuilder: (context, error, stackTrace) {
-            return const SizedBox.shrink();
-          },
-        );
+        if (currentUrl == pngUrl && currentUrl != jpgUrl) {
+          GameImageThumb._resolvedThumbUrls[widget.gameUrl] = jpgUrl;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _effectiveUrl = jpgUrl;
+              });
+            }
+          });
+        }
+        return const SizedBox.shrink();
       },
     );
   }
@@ -1846,6 +2198,13 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   web.HTMLVideoElement? _videoFg;
   web.HTMLVideoElement? _videoBg;
   double? _pendingLeadTime;
+  Game? _activeSubGame;
+
+  Game get _currentGame =>
+      _activeSubGame ??
+      (widget.item is Game
+          ? (widget.item as Game)
+          : (widget.item as GameCompilation).games.first);
 
   final ValueNotifier<double> playbackProgressNotifier = ValueNotifier<double>(0.0);
   Ticker? _progressTicker;
@@ -1874,20 +2233,21 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   }
 
   void resetThumbnailIfStill() {
-    final primaryGame = widget.item is Game ? (widget.item as Game) : (widget.item as GameCompilation).games.first;
+    final primaryGame = _currentGame;
     if (primaryGame.stillThumbnail) {
       if (mounted) {
         setState(() {
           _useVideo = false;
         });
       }
+      final skip = primaryGame.skipSeconds;
       if (_videoFg != null) {
         _videoFg!.pause();
-        _videoFg!.currentTime = 0.0;
+        _videoFg!.currentTime = skip;
       }
       if (_videoBg != null) {
         _videoBg!.pause();
-        _videoBg!.currentTime = 0.0;
+        _videoBg!.currentTime = skip;
       }
     }
   }
@@ -1896,9 +2256,10 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
     if (_videoFg == null) {
       _ensurePlatformViewRegistered();
     }
+    final skip = _currentGame.skipSeconds;
     final d = _videoFg?.duration;
     if (d != null && d > 0 && !d.isNaN) {
-      return d;
+      return math.max(0.0, d - skip);
     }
 
     final completer = Completer<double>();
@@ -1908,7 +2269,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
     void check() {
       final cd = _videoFg?.duration;
       if (cd != null && cd > 0 && !cd.isNaN && !completer.isCompleted) {
-        completer.complete(cd);
+        completer.complete(math.max(0.0, cd - skip));
       }
     }
 
@@ -1918,7 +2279,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
       check();
     }
 
-    return completer.future.timeout(const Duration(seconds: 4), onTimeout: () => 15.0).whenComplete(() {
+    return completer.future.timeout(const Duration(seconds: 4), onTimeout: () => math.max(1.0, 15.0 - skip)).whenComplete(() {
       subMeta?.cancel();
       subChange?.cancel();
     });
@@ -1931,6 +2292,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   }
 
   void playFromStart(Game game) {
+    _activeSubGame = game;
     if (!_useVideo) {
       setState(() {
         _useVideo = true;
@@ -1941,19 +2303,55 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   }
 
   void loadAndPlaySubGame(Game subGame) {
+    _activeSubGame = subGame;
+    if (mounted) setState(() {});
+
     final cleanBaseUrl = widget.cleanBaseUrl.endsWith('/')
         ? widget.cleanBaseUrl.substring(0, widget.cleanBaseUrl.length - 1)
         : widget.cleanBaseUrl;
     final videoUrl = '$cleanBaseUrl/_thumbs${subGame.url}.mp4';
 
     if (_videoFg != null && _videoBg != null) {
-      _videoFg!.src = videoUrl;
-      _videoBg!.src = videoUrl;
-      _videoFg!.currentTime = 0.0;
-      _videoBg!.currentTime = 0.0;
+      final currentSrc = _videoFg!.src;
+      final isSameSrc = currentSrc == videoUrl ||
+          (currentSrc.isNotEmpty && currentSrc.endsWith('/_thumbs${subGame.url}.mp4'));
+
       playbackProgressNotifier.value = 0.0;
-      _videoFg!.play();
-      _videoBg!.play();
+
+      if (isSameSrc && _videoFg!.readyState >= 2) {
+        _videoFg!.currentTime = subGame.skipSeconds;
+        if (_videoBg != null) _videoBg!.currentTime = subGame.skipSeconds;
+        _videoFg!.play();
+        if (_videoBg != null) _videoBg!.play();
+      } else {
+        _videoFg!.src = videoUrl;
+        if (_videoBg != null) _videoBg!.src = videoUrl;
+
+        StreamSubscription? subMeta;
+        subMeta = _videoFg!.onLoadedMetadata.listen((_) {
+          subMeta?.cancel();
+          if (_videoFg != null) {
+            _videoFg!.currentTime = subGame.skipSeconds;
+            if (_videoBg != null) _videoBg!.currentTime = subGame.skipSeconds;
+            _videoFg!.play();
+            if (_videoBg != null) _videoBg!.play();
+          }
+        });
+
+        _videoFg!.load();
+        if (_videoBg != null) _videoBg!.load();
+      }
+    }
+  }
+
+  void _enforceSkipTime() {
+    if (_videoFg == null) return;
+    final skip = _currentGame.skipSeconds;
+    if (skip > 0 && _videoFg!.currentTime < skip) {
+      _videoFg!.currentTime = skip;
+      if (_videoBg != null) {
+        _videoBg!.currentTime = skip;
+      }
     }
   }
 
@@ -1965,11 +2363,13 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
     }
     try {
       final d = _videoFg!.duration;
-      if (d > 0 && !d.isNaN) {
-        double startTime = d - _pendingLeadTime!;
-        while (startTime < 0) {
-          startTime += d;
-        }
+      final skip = _currentGame.skipSeconds;
+      final eff = d - skip;
+      if (eff > 0 && !eff.isNaN) {
+        final lead = _pendingLeadTime!;
+        double rem = eff - (lead % eff);
+        if (rem >= eff) rem = 0.0;
+        final startTime = skip + rem;
         _videoFg!.currentTime = startTime;
         if (_videoBg != null) {
           _videoBg!.currentTime = startTime;
@@ -1980,9 +2380,10 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
   }
 
   void resetVideoToStart() {
+    final skip = _currentGame.skipSeconds;
     if (_videoFg != null && _videoBg != null) {
-      _videoFg!.currentTime = 0.0;
-      _videoBg!.currentTime = 0.0;
+      _videoFg!.currentTime = skip;
+      _videoBg!.currentTime = skip;
     }
     playbackProgressNotifier.value = 0.0;
   }
@@ -2034,8 +2435,16 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
         videoFg.onPlay.listen((_) => videoBg.play());
         videoFg.onPause.listen((_) => videoBg.pause());
         videoFg.onEnded.listen((_) => _videoEndedController.add(null));
-        videoFg.onLoadedMetadata.listen((_) => _applyLeadTime());
-        videoFg.onCanPlay.listen((_) => _applyLeadTime());
+        videoFg.onLoadedMetadata.listen((_) {
+          _enforceSkipTime();
+          _applyLeadTime();
+        });
+        videoFg.onCanPlay.listen((_) {
+          _enforceSkipTime();
+          _applyLeadTime();
+        });
+        videoFg.onTimeUpdate.listen((_) => _enforceSkipTime());
+        videoFg.onSeeked.listen((_) => _enforceSkipTime());
 
         _videoFg = videoFg;
         _videoBg = videoBg;
@@ -2059,18 +2468,32 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
       if (_videoFg != null) {
         final cur = _videoFg!.currentTime;
         final dur = _videoFg!.duration;
-        if (dur > 0 && !dur.isNaN) {
-          playbackProgressNotifier.value = cur / dur;
+        final skip = _currentGame.skipSeconds;
+        final eff = dur - skip;
+        if (eff > 0 && !eff.isNaN) {
+          playbackProgressNotifier.value = ((cur - skip) / eff).clamp(0.0, 1.0);
         }
       }
     });
     _progressTicker?.start();
 
     final primaryGame = widget.item is Game ? (widget.item as Game) : (widget.item as GameCompilation).games.first;
+    final isVideoMode = widget.gridPage.option.isVideoMode;
+
+    final cleanBaseUrl = widget.cleanBaseUrl.endsWith('/')
+        ? widget.cleanBaseUrl.substring(0, widget.cleanBaseUrl.length - 1)
+        : widget.cleanBaseUrl;
+    final videoUrl = "$cleanBaseUrl/_thumbs${widget.item.displayUrl}.mp4";
+
+    if (isVideoMode || primaryGame.isVideo || GameImageThumb._verifiedVideoUrls.contains(videoUrl)) {
+      _useVideo = true;
+    }
 
     if (!primaryGame.stillThumbnail) {
       _ensurePlatformViewRegistered();
-      _checkVideoSource();
+      if (!_useVideo) {
+        _checkVideoSource();
+      }
     }
   }
 
@@ -2096,9 +2519,16 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
         ? widget.cleanBaseUrl.substring(0, widget.cleanBaseUrl.length - 1)
         : widget.cleanBaseUrl;
     final videoUrl = "$cleanBaseUrl/_thumbs${widget.item.displayUrl}.mp4";
+
+    if (GameImageThumb._verifiedVideoUrls.contains(videoUrl)) {
+      if (mounted) setState(() => _useVideo = true);
+      return;
+    }
+
     try {
       final response = await http.head(Uri.parse(videoUrl));
       if (response.statusCode == 200) {
+        GameImageThumb._verifiedVideoUrls.add(videoUrl);
         if (mounted) {
           setState(() {
             _useVideo = true;
@@ -2134,7 +2564,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
               children: [
                 GameImageThumb(
                   cleanBaseUrl: cleanBaseUrl,
-                  gameUrl: widget.item.displayUrl,
+                  gameUrl: _currentGame.displayUrl,
                   fit: BoxFit.contain,
                 ),
                 if (_useVideo)
@@ -2210,7 +2640,7 @@ class _GameThumbState extends State<GameThumb> with TickerProviderStateMixin {
                         children: [
                           GameImageThumb(
                             cleanBaseUrl: cleanBaseUrl,
-                            gameUrl: widget.item.displayUrl,
+                            gameUrl: _currentGame.displayUrl,
                             fit: BoxFit.contain,
                           ),
                           if (_useVideo)
@@ -2368,6 +2798,19 @@ class _GameDetailPageState extends State<GameDetailPage> {
             videoFg.style.cursor = 'pointer';
             videoFg.setAttribute('playsinline', 'true');
 
+            final skip = widget.game.skipSeconds;
+            void enforceSkip() {
+              if (skip > 0 && videoFg.currentTime < skip) {
+                videoFg.currentTime = skip;
+                videoBg.currentTime = skip;
+              }
+            }
+
+            videoFg.onLoadedMetadata.listen((_) => enforceSkip());
+            videoFg.onCanPlay.listen((_) => enforceSkip());
+            videoFg.onTimeUpdate.listen((_) => enforceSkip());
+            videoFg.onSeeked.listen((_) => enforceSkip());
+
             videoFg.onPlay.listen((_) => videoBg.play());
             videoFg.onPause.listen((_) => videoBg.pause());
             videoFg.onClick.listen((_) => _safePop());
@@ -2382,6 +2825,7 @@ class _GameDetailPageState extends State<GameDetailPage> {
             iframe.style.border = 'none';
             iframe.style.width = '100%';
             iframe.style.height = '100%';
+            iframe.style.backgroundColor = 'black';
             iframe.allow = 'fullscreen; autoplay; gamepad; encrypted-media; midi; clipboard-write';
             iframe.setAttribute('allowfullscreen', 'true');
             iframe.setAttribute('webkitallowfullscreen', 'true');
@@ -2601,23 +3045,11 @@ class _GameDetailPageState extends State<GameDetailPage> {
                   child: SizedBox.expand(
                     child: Stack(
                       children: [
-                        if (!widget.game.isVideo && !widget.option.isVideoMode) ...[
-                          Positioned.fill(
-                            child: ImageFiltered(
-                              imageFilter: ui.ImageFilter.blur(sigmaX: 7.0, sigmaY: 7.0),
-                              child: GameImageThumb(
-                                cleanBaseUrl: cleanBaseUrl,
-                                gameUrl: widget.game.url,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black,
                           ),
-                          Positioned.fill(
-                            child: Container(
-                              color: Colors.white.withValues(alpha: 0.2),
-                            ),
-                          ),
-                        ],
+                        ),
                         SizedBox.expand(
                           child: _isExecuting
                               ? const Center(
