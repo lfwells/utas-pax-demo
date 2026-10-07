@@ -2823,6 +2823,13 @@ class _GameDetailPageState extends State<GameDetailPage> {
             container.appendChild(videoFg);
             return container;
           } else {
+            final container = web.document.createElement('div') as web.HTMLDivElement;
+            container.style.position = 'relative';
+            container.style.width = '100%';
+            container.style.height = '100%';
+            container.style.overflow = 'visible';
+            container.style.backgroundColor = 'black';
+
             final iframe = web.document.createElement('iframe') as web.HTMLIFrameElement;
             iframe.src = '$cleanBaseUrl${widget.game.url}';
             iframe.style.border = 'none';
@@ -2833,7 +2840,14 @@ class _GameDetailPageState extends State<GameDetailPage> {
             iframe.setAttribute('allowfullscreen', 'true');
             iframe.setAttribute('webkitallowfullscreen', 'true');
             iframe.setAttribute('mozallowfullscreen', 'true');
-            return iframe;
+
+            if (widget.game.scale != 1.0) {
+              iframe.style.transform = 'scale(${widget.game.scale})';
+              iframe.style.transformOrigin = 'top center';
+            }
+
+            container.appendChild(iframe);
+            return container;
           }
         },
       );
@@ -3073,15 +3087,11 @@ class _GameDetailPageState extends State<GameDetailPage> {
                           )
                               : Align(
                             alignment: Alignment.topCenter,
-                            child: Transform.scale(
-                              scale: widget.game.scale,
-                              alignment: Alignment.topCenter,
-                              child: AspectRatio(
-                                aspectRatio: widget.game.aspectRatio,
-                                child: PointerInterceptor(
-                                  intercepting: !_showDescription,
-                                  child: HtmlElementView(viewType: _viewId),
-                                ),
+                            child: AspectRatio(
+                              aspectRatio: widget.game.aspectRatio,
+                              child: PointerInterceptor(
+                                intercepting: !_showDescription,
+                                child: HtmlElementView(viewType: _viewId),
                               ),
                             ),
                           ))
