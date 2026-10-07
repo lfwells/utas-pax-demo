@@ -72,9 +72,19 @@ app.use("/games", (req, res, next) => {
         return fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory();
       });
 
-      const requestPath = req.path.split('/')[1]; // get first segment of request path
+      // req.path is still percent-encoded (spaces, apostrophes, etc.)
+      let decodedPath;
+      try {
+        decodedPath = decodeURIComponent(req.path);
+      } catch (e) {
+        return res.status(400).send('Bad request path');
+      }
+      const requestPath = decodedPath.split('/')[1]; // get first segment of request path
       if (gamesFolders.includes(requestPath)) {
-        const filePath = path.join(gamesPath, req.path);
+        const filePath = path.join(gamesPath, decodedPath);
+        if (!filePath.startsWith(path.resolve(gamesPath) + path.sep)) {
+          return res.status(403).send('Forbidden');
+        }
         if (!fs.existsSync(filePath)) {
           return res.status(404).send('File not found: ' + filePath);
         }
