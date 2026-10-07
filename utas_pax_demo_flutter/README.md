@@ -50,3 +50,7 @@ node record.js [JsonFileName] [DurationInSeconds] [BaseUrlOrPort]
   ```
 
 Recordings are automatically saved as full 1080p `.webm` and `.mp4` video files inside `./recordings/`.
+
+## Standalone Launcher Folder
+
+The packaged launcher saves the selected games folder in `config.json` beside the executable and reuses it on later launches. On first launch on Windows, the folder picker defaults to `C:\Users\Admin\Desktop\PAXAus2026\games` when that directory exists. To choose a different folder, close the launcher and remove `config.json`; the picker will appear again.

@@ -7,8 +7,10 @@ const portfinder = require('portfinder');
 // Express App
 const app = require('./utas_pax_demo_api/app');
 
-// Persist config relative to executable runtime directory
-const CONFIG_FILE = path.join(process.cwd(), 'config.json');
+// Keep packaged settings beside the executable, independent of the launch directory.
+const APP_DIR = process.pkg ? path.dirname(process.execPath) : __dirname;
+const CONFIG_FILE = path.join(APP_DIR, 'config.json');
+const WINDOWS_DEFAULT_GAMES_PATH = String.raw`C:\Users\Admin\Desktop\PAXAus2026\games`;
 
 /**
  * Load saved configuration or return an empty object
@@ -86,33 +88,39 @@ async function start() {
   try {
     const config = loadConfig();
 
-    // 1. Determine default starting path
-    let defaultPath = config.gamesPath;
-    if (!defaultPath || !fs.existsSync(defaultPath)) {
-      defaultPath = path.join(process.cwd(), 'games');
+    // Reuse the saved folder; only prompt when there is no usable saved choice.
+    let selectedGamesPath = typeof config.gamesPath === 'string'
+      ? config.gamesPath
+      : null;
+    if (!selectedGamesPath || !fs.existsSync(selectedGamesPath)) {
+      let defaultPath = process.platform === 'win32'
+        ? WINDOWS_DEFAULT_GAMES_PATH
+        : path.join(APP_DIR, 'games');
       if (!fs.existsSync(defaultPath)) {
-        defaultPath = process.cwd();
+        defaultPath = path.join(process.cwd(), 'games');
+        if (!fs.existsSync(defaultPath)) {
+          defaultPath = process.cwd();
+        }
       }
+
+      console.log('Opening folder picker dialog...');
+      selectedGamesPath = await selectFolderDialog(defaultPath);
+
+      if (!selectedGamesPath) {
+        console.log('\nFolder selection was cancelled. Terminating application...');
+        process.exit(0);
+      }
+
+      config.gamesPath = selectedGamesPath;
+      saveConfig(config);
+    } else {
+      console.log(`Using saved Games Directory: ${selectedGamesPath}`);
     }
 
-    // 2. Prompt user with native OS folder dialog
-    console.log('Opening folder picker dialog...');
-    const selectedGamesPath = await selectFolderDialog(defaultPath);
-
-    // 3. Handle cancellation -> terminate app
-    if (!selectedGamesPath) {
-      console.log('\nFolder selection was cancelled. Terminating application...');
-      process.exit(0);
-    }
-
-    // 4. Save selection to config
-    config.gamesPath = selectedGamesPath;
-    saveConfig(config);
-
-    // 5. Register Games folder path on Express app
+    // Register Games folder path on Express app
     app.set('gamesPath', selectedGamesPath);
 
-    // 6. Initialize Server & find available port
+    // Initialize Server & find available port
     const port = await portfinder.getPortPromise({ port: 5000 });
     app.set('port', port);
 
