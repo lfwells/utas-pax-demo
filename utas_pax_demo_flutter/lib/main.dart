@@ -837,6 +837,7 @@ class Game extends GridItem {
   final bool stillThumbnail;
   final double aspectRatio;
   final double skipSeconds;
+  final double scale;
 
   @override
   String get displayUrl => url;
@@ -856,6 +857,7 @@ class Game extends GridItem {
     this.stillThumbnail = false,
     this.aspectRatio = 16 / 9,
     this.skipSeconds = 0.0,
+    this.scale = 1.0,
   });
 
   factory Game.fromJson(Map<String, dynamic> json) {
@@ -936,6 +938,7 @@ class Game extends GridItem {
       stillThumbnail: parseBool(json['still_thumbnail'] ?? json['stillThumbnail'], false),
       aspectRatio: parseAspectRatio(json['aspectRatio'] ?? json['aspect_ratio']),
       skipSeconds: parseDouble(json['skip_seconds'] ?? json['skipSeconds']),
+      scale: parseDouble(json['scale'], defaultValue: 1.0),
     );
   }
 
@@ -3068,12 +3071,17 @@ class _GameDetailPageState extends State<GameDetailPage> {
                             intercepting: !_showDescription,
                             child: HtmlElementView(viewType: _viewId),
                           )
-                              : Center(
-                            child: AspectRatio(
-                              aspectRatio: widget.game.aspectRatio,
-                              child: PointerInterceptor(
-                                intercepting: !_showDescription,
-                                child: HtmlElementView(viewType: _viewId),
+                              : Align(
+                            alignment: Alignment.topCenter,
+                            child: Transform.scale(
+                              scale: widget.game.scale,
+                              alignment: Alignment.topCenter,
+                              child: AspectRatio(
+                                aspectRatio: widget.game.aspectRatio,
+                                child: PointerInterceptor(
+                                  intercepting: !_showDescription,
+                                  child: HtmlElementView(viewType: _viewId),
+                                ),
                               ),
                             ),
                           ))
