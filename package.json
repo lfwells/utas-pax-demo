@@ -6,7 +6,7 @@
   "bin": "launcher.js",
   "scripts": {
     "start": "node launcher.js",
-    "build:flutter": "cd utas_pax_demo_flutter && flutter build web --release",
+    "build:flutter": "cd utas_pax_demo_flutter && flutter build web --release --web-renderer canvaskit --canvas-kit-url canvaskit/",
     "package:macos": "pkg . --targets node18-macos-arm64 --output \"dist/Pax Demo\" --public",
     "package:windows": "pkg . --targets node18-win-x64 --output dist/pax-demo.exe --public",
     "build": "npm run build:flutter && npm run package:macos"
