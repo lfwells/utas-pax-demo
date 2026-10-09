@@ -17,6 +17,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 
 void main() {
+  // Prevent Google Fonts from trying to download fonts over the network offline
+  GoogleFonts.config.allowRuntimeFetching = false;
+
   runApp(const MyApp());
 }
 
