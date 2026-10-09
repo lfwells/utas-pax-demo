@@ -3690,15 +3690,27 @@ class _GameDetailPageState extends State<GameDetailPage> {
           container.style.position = 'relative';
           container.style.width = '100%';
           container.style.height = '100%';
-          container.style.overflow = 'visible';
+          container.style.overflow = 'hidden';
           container.style.backgroundColor = 'black';
+
+          final gameScale = widget.game.scale <= 0 ? 1.0 : widget.game.scale;
+          final viewportPercent = 100 / gameScale;
+
+          final iframeHost =
+              web.document.createElement('div') as web.HTMLDivElement;
+          iframeHost.style.width = '100%';
+          iframeHost.style.height = '100%';
+          iframeHost.style.display = 'flex';
+          iframeHost.style.justifyContent = 'center';
+          iframeHost.style.alignItems = 'flex-start';
+          iframeHost.style.overflow = 'hidden';
 
           final iframe =
               web.document.createElement('iframe') as web.HTMLIFrameElement;
           iframe.src = '$cleanBaseUrl${widget.game.url}';
           iframe.style.border = 'none';
-          iframe.style.width = '100%';
-          iframe.style.height = '100%';
+          iframe.style.width = '${viewportPercent}%';
+          iframe.style.height = '${viewportPercent}%';
           iframe.style.backgroundColor = 'black';
           iframe.allow =
               'fullscreen; autoplay; gamepad; encrypted-media; midi; clipboard-write';
@@ -3706,12 +3718,14 @@ class _GameDetailPageState extends State<GameDetailPage> {
           iframe.setAttribute('webkitallowfullscreen', 'true');
           iframe.setAttribute('mozallowfullscreen', 'true');
 
-          if (widget.game.scale != 1.0) {
-            iframe.style.transform = 'scale(${widget.game.scale})';
+          if (gameScale != 1.0) {
+            // Scale visuals while increasing iframe viewport to avoid clipping.
+            iframe.style.transform = 'scale($gameScale)';
             iframe.style.transformOrigin = 'top center';
           }
 
-          container.appendChild(iframe);
+          iframeHost.appendChild(iframe);
+          container.appendChild(iframeHost);
           return container;
         }
       });
